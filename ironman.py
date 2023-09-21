@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.stats import gamma, norm, beta, truncnorm, lognorm
+import pandas as pd
 import batman
 import rmfit
 from dynesty import NestedSampler, DynamicNestedSampler
@@ -48,6 +49,15 @@ def u1_u2_from_q1_q2(q1,q2):
 def q1_q2_from_u1_u2(u1,u2):
     q1, q2 = (u1 + u2)**2. , u1/(2.*(u1+u2))
     return q1, q2
+
+def get_vals(self,vec):
+    fvec   = np.sort(vec)
+
+    fval  = np.median(fvec)
+    nn = int(np.around(len(fvec)*0.15865))
+
+    vali,valf = fval - fvec[nn],fvec[-nn] - fval
+    return fval,vali,valf
 
 class Data_Org:
     def __init__(self,lc_time=None,lc_flux=None,lc_flux_err=None,rv_time=None,rv=None,rv_err=None,rm_time=None,rm=None,rm_err=None,verbose = True,exp_times=None):
@@ -133,18 +143,21 @@ class Fit:
         bjd = self.data.x[inst]
         P = dct_params["per_p1"]
         t0 = dct_params["t0_p1"]
+        #phase = ((bjd-t0 + 0.5*P) % P)/P
         e = dct_params["e_p1"]    
         w = dct_params["omega_p1"]
         K = dct_params["K_p1"]
         gamma = dct_params["gamma_"+inst]
-        #phase = ((bjd-t0 + 0.5*P) % P)/P
         rv_model = rmfit.get_rv_curve(bjd,P,t0,e,w,K,plot=False,verbose=False)+gamma
         return rv_model
     
     def get_lc_model(self,dct_params,inst):
         bjd = self.data.x[inst]
+        #P = dct_params["per_p1"]
+        #t0 = dct_params["t0_p1"]
+        #phase = ((bjd-t0 + 0.5*P) % P)/P
         tr_model = batman.TransitParams()
-        tr_model.t0 = dct_params["t0_p1"]                  #epoch of mid-transit
+        tr_model.t0 = dct_params["t0_p1"]                 #epoch of mid-transit
         tr_model.per =  dct_params["per_p1"]                 #orbital period
         tr_model.rp = dct_params["p_p1"]                 #planet radius (in units of stellar radii)
         tr_model.a = dct_params["sma_p1"]              #semi-major axis (in units of stellar radii)
@@ -179,8 +192,8 @@ class Fit:
         sma = dct_params["sma_p1"]
         inc = dct_params["inc_p1"]
         if self.data.exp_times[inst] != False:
-            RM = rmfit.RMHirano(lam,vsini,1,0.5,sma,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic",supersample_factor=10,exp_time=float(self.data.exp_times[inst]))
-            RM_model = RM.evaluate(bjd) + rmfit.get_rv_curve(bjd,1,0.5,e,w,K,plot=False,verbose=False)+gamma
+            RM = rmfit.RMHirano(lam,vsini,P,t0,sma,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic",supersample_factor=10,exp_time=float(self.data.exp_times[inst]))
+            RM_model = RM.evaluate(bjd) + rmfit.get_rv_curve(bjd,P,t0,e,w,K,plot=False,verbose=False)+gamma
         else:
             print("No exp_time for instrument:", inst)
             return False
