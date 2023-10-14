@@ -250,8 +250,8 @@ class Fit:
             dct_i["u1_"+inst], dct_i["u2_"+inst] = u1_u2_from_q1_q2(float(dct_i["q1_"+inst]),float(dct_i["q2_"+inst]))
             if inst in self.data.rm_instruments:
                 dct_i["beta_"+inst] = inst_params[2]
-                print(inst_params)
-                print(dct_i)
+                #print(inst_params)
+                #print(dct_i)
         dct_i["sma_p1"] = ((c.G*((dct_i["per_p1"]*u.d)**2.0)*(dct_i["rho_star"]*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
         dct_i["inc_p1"] = np.arccos(dct_i["b_p1"]/dct_i["sma_p1"]*((1.0+dct_i["e_p1"]*np.sin(dct_i["omega_p1"]*np.pi/180.0))/(1.0 - dct_i["e_p1"]**2.0)))*180.0/np.pi
         
