@@ -285,12 +285,14 @@ class Post:
             val, mi, ma = get_vals(np.sort(self.chain[:,i]))
             vals[parameter], err_up[parameter], err_down[parameter] = val, ma, mi
             print(parameter, val, mi, ma)
+        self.chain = pd.DataFrame(data = self.chain, columns = self.priors.varyin_parameters)
         for i,parameter in enumerate(self.priors.fixed_parameters):
             vals[parameter] = float(self.priors.dct[parameter][1][0])
+            vals_to_chain = np.full(len(self.chain),float(self.priors.dct[parameter][1][0]))
+            self.chain[parameter] = vals_to_chain
         self.vals = vals
         self.err_up = err_up
         self.err_down = err_down
-        self.chain = pd.DataFrame(data = self.chain, columns = self.priors.varyin_parameters)
         
         for inst in np.concatenate((self.data.lc_instruments,self.data.rm_instruments)):
             search_key = "_"+inst
