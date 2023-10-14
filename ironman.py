@@ -111,7 +111,7 @@ class Data_Org:
 
 class Priors:
     def __init__(self,file_,data,verbose = True):
-
+        
         self.data = data
         self.dct = {}
         self.verbose = verbose
@@ -246,7 +246,12 @@ class Fit:
             inst_params = [val for key, val in dct_i.items() if search_key in key]
             dct_i["q1_"+inst] = inst_params[0]
             dct_i["q2_"+inst] = inst_params[1]
+            #print(inst_params)
             dct_i["u1_"+inst], dct_i["u2_"+inst] = u1_u2_from_q1_q2(float(dct_i["q1_"+inst]),float(dct_i["q2_"+inst]))
+            if inst in self.data.rm_instruments:
+                dct_i["beta_"+inst] = inst_params[2]
+                print(inst_params)
+                print(dct_i)
         dct_i["sma_p1"] = ((c.G*((dct_i["per_p1"]*u.d)**2.0)*(dct_i["rho_star"]*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
         dct_i["inc_p1"] = np.arccos(dct_i["b_p1"]/dct_i["sma_p1"]*((1.0+dct_i["e_p1"]*np.sin(dct_i["omega_p1"]*np.pi/180.0))/(1.0 - dct_i["e_p1"]**2.0)))*180.0/np.pi
         
@@ -293,6 +298,9 @@ class Post:
             self.chain["u1_"+inst],self.chain["u2_"+inst] = u1_u2_from_q1_q2(self.chain[inst_params[0]].values,self.chain[inst_params[1]].values)
             self.vals["u1_"+inst] = get_vals(self.chain["u1_"+inst].values)[0]
             self.vals["u2_"+inst] = get_vals(self.chain["u2_"+inst].values)[0]
+            if inst in self.data.rm_instruments:
+                self.chain["beta_"+inst] = self.chain[inst_params[2]].values
+                self.vals["beta_"+inst] = get_vals(self.chain["beta_"+inst].values)[0]
         
     def find_fixed_or_chain(self,parameter):
         if parameter in self.chain.columns:
@@ -309,7 +317,7 @@ class Post:
         aRs = ((c.G*((P*u.d)**2.0)*(rho*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
         inc = np.arccos(b/aRs*((1+e*np.sin(w*np.pi/180.0))/(1.0 - e**2.0)))*180.0/np.pi
         val, mi, ma = get_vals(aRs)
-        print("aRs_p1 (deg):",val, mi, ma)
+        print("aRs_p1:",val, mi, ma)
         self.vals["sma_p1"], self.err_up["sma_p1"], self.err_down["sma_p1"] = val, ma, mi
         val, mi, ma = get_vals(inc)
         print("inc_p1 (deg):",val, mi, ma)
@@ -523,7 +531,6 @@ class Post:
         ax2.tick_params(axis="y",which="minor",direction="in",length=5,width=1)
         rmfit.utils.ax_apply_settings(ax2,ticksize=35)
         plt.tight_layout()
-        print(len(self.data.rv_instruments))
         fig.legend(loc="upper center",fancybox=True,bbox_to_anchor=(0.5, 1.09),shadow=False,fontsize=45,ncol=len(self.data.rv_instruments))
         plt.show() 
         
