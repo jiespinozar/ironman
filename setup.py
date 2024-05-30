@@ -5,7 +5,7 @@ def readme():
         return f.read()
 
 setup(
-    name='ironman',
+    name='ironman-package',
     version='0.0.1',
     author='Juan Ignacio Espinoza-Retamal',
     author_email='jiespinozar@uc.cl',
