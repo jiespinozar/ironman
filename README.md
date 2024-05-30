@@ -31,7 +31,7 @@ pip install .
 
 # Examples
 
-To see examples of the usage of this module, see the example notebooks.
+To see examples of the usage of this module, see the example notebooks in the Examples folder.
 
 - Example 1: How to fit data with ironman
 - Example 2: How to simulate data (e.g., for proposals)
