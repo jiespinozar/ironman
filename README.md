@@ -16,7 +16,12 @@ Required packages:
 
 # Installation
 
-You should be able to do the following:
+You can install ironman with pip
+
+```
+pip install ironman-package
+```
+Or cloning the repository
 
 ```
 git clone https://github.com/jiespinozar/ironman
