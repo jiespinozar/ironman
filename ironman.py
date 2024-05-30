@@ -1,25 +1,14 @@
-import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib import rcParams
-rcParams["axes.formatter.useoffset"] = False
-rcParams['axes.formatter.limits'] = -15,15
-rcParams['mathtext.fontset'] = 'stix'
-rcParams['font.family'] = 'STIXGeneral'
-rcParams['xtick.direction']='in'
-rcParams['ytick.direction']='in'
-import rmfit
-import batman
-import matplotlib.gridspec as gridspec
-from astropy import units as u
-from astropy import constants as c
-import corner
-import lightkurve as lk
 from scipy.stats import gamma, norm, beta, truncnorm, lognorm
-from dynesty import NestedSampler, DynamicNestedSampler
+import pandas as pd
+import batman
+import rmfit
+from dynesty import DynamicNestedSampler
 from dynesty.utils import resample_equal
 import contextlib
 from multiprocessing import Pool
+from astropy import units as u
+from astropy import constants as c
 import itertools
 
 def transform_uniform(x, hyperparameters):
@@ -76,10 +65,32 @@ def Transit(bjd, t0, P, RpRs, sma, inc, e, w, u1, u2):                 #Tierra
     flux_lc = m.light_curve(params)          #calculates light curve
     return flux_lc
 
+def create_RM_data(bjd,dct_params):
+        lam = dct_params["lam_p1"]
+        vsini = dct_params["vsini_star"]
+        P =  dct_params["per_p1"]
+        t0 = dct_params["t0_p1"]
+        RpRs = dct_params["p_p1"] 
+        e = dct_params["e_p1"]
+        w = dct_params["omega_p1"]
+        beta = dct_params["beta"]
+        u1 = dct_params["u"][0]
+        u2 = dct_params["u"][1]
+        sma = dct_params["aRs_p1"]
+        inc = dct_params["inc_p1"]
+        exp_time = dct_params["exp_time"]/60./60./24.
+        rv_prec = dct_params["rv_prec"]
+        errors = np.ones(len(bjd))*rv_prec
+        RM = rmfit.RMHirano(lam,vsini,P,t0,sma,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic",supersample_factor=10,exp_time=exp_time)
+        RM_model = RM.evaluate(bjd,base_error=rv_prec)
+        return RM_model, errors
+
 def get_vals(vec):
     fvec   = np.sort(vec)
+
     fval  = np.median(fvec)
     nn = int(np.around(len(fvec)*0.15865))
+
     vali,valf = fval - fvec[nn],fvec[-nn] - fval
     return fval,vali,valf
 
@@ -111,14 +122,15 @@ class Data_Org:
 
 class Priors:
     def __init__(self,file_,data,verbose = True):
-        
         self.data = data
         self.dct = {}
         self.verbose = verbose
         with open(file_) as priors_file:
             for line in priors_file:
                 line = line.split()
-                hyp = tuple(line[2].split(","))
+                hyp = ()
+                for element in line[2].split(","):
+                    hyp = hyp + (float(element),)
                 self.dct[line[0]] = [line[1], hyp]
         if self.verbose:
             print("Priors dictionary ready...")
@@ -136,6 +148,20 @@ class Priors:
                 varying.append(parameter)
         self.fixed_parameters = fixed
         self.varyin_parameters = varying
+        if "rho_star" in self.parameters:
+            self.rho_param = True
+        else:
+            self.rho_param = False
+        if "b_p1" in self.parameters:
+            self.b_param = True
+        else:
+            self.b_param = False
+        if "vsini_star" in self.parameters:
+            self.true_obliquity_param = False
+        elif "cosi_star" in self.parameters and "Prot_star" in self.parameters and "r_star" in self.parameters:
+            self.true_obliquity_param = True
+        else:
+            print("Something went wrong with the obliquity parametrization. Please check the parameters. For deriving the true obliquity include cosi_star, Prot_star, and r_star. For the sky-projected obliquity include vsini_star.")
 
 class Fit:
     def __init__(self,data,priors):
@@ -144,24 +170,23 @@ class Fit:
         self.ndim = len(self.priors.varyin_parameters)
 
     def priors_transform(self,params):
-        tranformed_values = []
-        for index,parameter in enumerate(self.priors.varyin_parameters):
-            dist = self.priors.dct[parameter][0]
-            if dist != "FIXED":
-                value = params[index]
-                lower = float(self.priors.dct[parameter][1][0])
-                upper = float(self.priors.dct[parameter][1][1])
-                priors_values = (lower,upper)
-                if dist == "uniform":
-                    transformed = transform_uniform(value, priors_values)
-                if dist == "normal":
-                    transformed = transform_normal(value, priors_values)
-                if dist == "loguniform":
-                    transformed = transform_loguniform(value, priors_values)
-                tranformed_values.append(transformed)
-            else:
-                continue
-        return tuple(tranformed_values)
+            tranformed_values = []
+            for index,parameter in enumerate(self.priors.varyin_parameters):
+                dist = self.priors.dct[parameter][0]
+                if dist != "FIXED":
+                    value = params[index]
+                    if dist == "uniform":
+                        transformed = transform_uniform(value, self.priors.dct[parameter][1])
+                    if dist == "normal":
+                        transformed = transform_normal(value, self.priors.dct[parameter][1])
+                    if dist == "loguniform":
+                        transformed = transform_loguniform(value, self.priors.dct[parameter][1])
+                    if dist == "truncatednormal":
+                        transformed = transform_truncated_normal(value, self.priors.dct[parameter][1])
+                    tranformed_values.append(transformed)
+                else:
+                    continue
+            return tuple(tranformed_values)
             
     def get_rv_model(self,dct_params,inst):
         bjd = self.data.x[inst]
@@ -171,26 +196,29 @@ class Fit:
         w = dct_params["omega_p1"]
         K = dct_params["K_p1"]
         gamma = dct_params["gamma_"+inst]
-        rv_model = rmfit.get_rv_curve(bjd,P,t0,e,w,K,plot=False,verbose=False)+gamma
+        gammadot = dct_params["gammadot"]
+        gammadotdot = dct_params["gammadotdot"]
+        rv_trend = gammadot*(bjd-t0) + gammadotdot*(bjd-t0)**2.0
+        rv_model = rmfit.get_rv_curve(bjd,P,t0,e,w,K,plot=False,verbose=False)+gamma+rv_trend
         return rv_model
     
     def get_lc_model(self,dct_params,inst):
         bjd = self.data.x[inst]
         tr_model = batman.TransitParams()
-        tr_model.t0 = dct_params["t0_p1"]                 #epoch of mid-transit
-        tr_model.per =  dct_params["per_p1"]                 #orbital period
-        tr_model.rp = dct_params["p_p1"]                 #planet radius (in units of stellar radii)
-        tr_model.a = dct_params["sma_p1"]              #semi-major axis (in units of stellar radii)
-        tr_model.inc = dct_params["inc_p1"]            #orbital inclination (in degrees)
-        tr_model.ecc = dct_params["e_p1"]                     #eccentricity
-        tr_model.w = dct_params["omega_p1"]                       #longitude of periastron (in degrees)
-        tr_model.u = [dct_params["u1_"+inst],dct_params["u2_"+inst]]              #limb darkening coefficients [u1, u2]
-        tr_model.limb_dark = "quadratic"       #limb darkening model
+        tr_model.t0 = dct_params["t0_p1"]                 
+        tr_model.per =  dct_params["per_p1"]                 
+        tr_model.rp = dct_params["p_p1"]                 
+        tr_model.a = dct_params["aRs_p1"]             
+        tr_model.inc = dct_params["inc_p1"]           
+        tr_model.ecc = dct_params["e_p1"]                     
+        tr_model.w = dct_params["omega_p1"]                       
+        tr_model.u = [dct_params["u1_"+inst],dct_params["u2_"+inst]]              
+        tr_model.limb_dark = "quadratic"       
         if self.data.exp_times[inst] != False:
             m = batman.TransitModel(tr_model, bjd, supersample_factor = 10, exp_time = float(self.data.exp_times[inst]))    #initializes model
         else:
             m = batman.TransitModel(tr_model, bjd)
-        flux_lc = m.light_curve(tr_model)          #calculates light curve
+        flux_lc = m.light_curve(tr_model)          
         return flux_lc
     
     def get_rm_model(self,dct_params,inst):
@@ -199,7 +227,6 @@ class Fit:
         vsini = dct_params["vsini_star"]
         P =  dct_params["per_p1"]
         t0 = dct_params["t0_p1"]
-        rho = dct_params["rho_star"]
         b = dct_params["b_p1"]
         RpRs = dct_params["p_p1"] 
         e = dct_params["e_p1"]
@@ -209,11 +236,14 @@ class Fit:
         gamma = dct_params["gamma_"+inst]
         u1 = dct_params["u1_"+inst]
         u2 = dct_params["u2_"+inst]
-        sma = dct_params["sma_p1"]
+        sma = dct_params["aRs_p1"]
         inc = dct_params["inc_p1"]
+        gammadot = dct_params["gammadot"]
+        gammadotdot = dct_params["gammadotdot"]
+        rv_trend = gammadot*(bjd-t0) + gammadotdot*(bjd-t0)**2.0
         if self.data.exp_times[inst] != False:
             RM = rmfit.RMHirano(lam,vsini,P,t0,sma,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic",supersample_factor=10,exp_time=float(self.data.exp_times[inst]))
-            RM_model = RM.evaluate(bjd) + rmfit.get_rv_curve(bjd,P,t0,e,w,K,plot=False,verbose=False)+gamma
+            RM_model = RM.evaluate(bjd) + rmfit.get_rv_curve(bjd,P,t0,e,w,K,plot=False,verbose=False)+gamma+rv_trend
         else:
             print("No exp_time for instrument:", inst)
             return False
@@ -240,20 +270,28 @@ class Fit:
                 n_fixed += 1
                 val = float(self.priors.dct[parameter][1][0])
                 dct_i[parameter] = val
-        
-        for inst in np.concatenate((self.data.lc_instruments,self.data.rm_instruments)):
+                
+        for inst in self.data.lc_instruments:
             search_key = "_"+inst
             inst_params = [val for key, val in dct_i.items() if search_key in key]
             dct_i["q1_"+inst] = inst_params[0]
             dct_i["q2_"+inst] = inst_params[1]
-            #print(inst_params)
             dct_i["u1_"+inst], dct_i["u2_"+inst] = u1_u2_from_q1_q2(float(dct_i["q1_"+inst]),float(dct_i["q2_"+inst]))
-            if inst in self.data.rm_instruments:
-                dct_i["beta_"+inst] = inst_params[2]
-                #print(inst_params)
-                #print(dct_i)
-        dct_i["sma_p1"] = ((c.G*((dct_i["per_p1"]*u.d)**2.0)*(dct_i["rho_star"]*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
-        dct_i["inc_p1"] = np.arccos(dct_i["b_p1"]/dct_i["sma_p1"]*((1.0+dct_i["e_p1"]*np.sin(dct_i["omega_p1"]*np.pi/180.0))/(1.0 - dct_i["e_p1"]**2.0)))*180.0/np.pi
+        for inst in self.data.rm_instruments:
+            search_key = "_"+inst
+            inst_params = [val for key, val in dct_i.items() if search_key in key]
+            dct_i["q1_"+inst] = inst_params[0]
+            dct_i["q2_"+inst] = inst_params[1]
+            dct_i["u1_"+inst], dct_i["u2_"+inst] = u1_u2_from_q1_q2(float(dct_i["q1_"+inst]),float(dct_i["q2_"+inst]))
+            dct_i["beta_"+inst] = inst_params[2]
+            dct_i["gamma_"+inst] = inst_params[3]
+        if self.priors.rho_param:     
+            dct_i["aRs_p1"] = ((c.G*((dct_i["per_p1"]*u.d)**2.0)*(dct_i["rho_star"]*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
+        if self.priors.b_param:    
+            dct_i["inc_p1"] = np.arccos(dct_i["b_p1"]/dct_i["aRs_p1"]*((1.0+dct_i["e_p1"]*np.sin(dct_i["omega_p1"]*np.pi/180.0))/(1.0 - dct_i["e_p1"]**2.0)))*180.0/np.pi
+        if self.priors.true_obliquity_param:
+            veq = (2.0*np.pi*dct_i["r_star"]*u.Rsun/dct_i["Prot_star"]/u.d).to(u.km/u.s).value
+            dct_i["vsini_star"] = veq*np.sqrt(1.0-dct_i["cosi_star"]**2.0)
         
         for inst in self.data.x:
             jitter = float(dct_i["sigma_"+inst])
@@ -269,17 +307,20 @@ class Fit:
             print("Running dynesty with {0} nlive and {1} threads".format(n_live,nthreads))
         with contextlib.closing(Pool(processes= nthreads - 1)) as executor:
             sampler = DynamicNestedSampler(self.LogLike, self.priors_transform, self.ndim, bound=bound, sample=sample , nlive = n_live, pool=executor, queue_size=nthreads, bootstrap = 0)
-            sampler.run_nested()#dlogz=0.01)
+            sampler.run_nested()
             res = sampler.results
+            #logZ = res['logz'][-1]
+            #print("LogZ: ", logZ)
             weights = np.exp(res['logwt'] - res['logz'][-1])
             self.postsamples = resample_equal(res.samples, weights)
         return self.postsamples
 
 class Post:
-    def __init__(self,data,priors,chain):
+    def __init__(self,data,priors,fit,chain):
         self.data = data
         self.priors = priors
         self.chain = chain
+        self.fit = fit
         vals, err_up, err_down = {}, {}, {}
         for i,parameter in enumerate(self.priors.varyin_parameters):
             val, mi, ma = get_vals(np.sort(self.chain[:,i]))
@@ -293,7 +334,6 @@ class Post:
         self.vals = vals
         self.err_up = err_up
         self.err_down = err_down
-        
         for inst in np.concatenate((self.data.lc_instruments,self.data.rm_instruments)):
             search_key = "_"+inst
             inst_params = [s for s in self.chain.columns if search_key in s]
@@ -302,30 +342,38 @@ class Post:
             self.vals["u2_"+inst] = get_vals(self.chain["u2_"+inst].values)[0]
             if inst in self.data.rm_instruments:
                 self.chain["beta_"+inst] = self.chain[inst_params[2]].values
+                self.chain["gamma_"+inst] = self.chain[inst_params[3]].values
                 self.vals["beta_"+inst] = get_vals(self.chain["beta_"+inst].values)[0]
-        
+                self.vals["gamma_"+inst] = get_vals(self.chain["gamma_"+inst].values)[0]
+        if self.priors.rho_param:     
+            self.chain["aRs_p1"] = ((c.G*((self.chain["per_p1"].values*u.d)**2.0)*(self.chain["rho_star"].values*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
+            val, mi, ma = get_vals(self.chain["aRs_p1"].values)
+            self.vals["aRs_p1"], self.err_up["aRs_p1"], self.err_down["aRs_p1"] = val, ma, mi
+            print("aRs_p1:",val, mi, ma)
+        if self.priors.b_param:    
+            self.chain["inc_p1"] = np.arccos(self.chain["b_p1"].values/self.chain["aRs_p1"].values*((1.0+self.chain["e_p1"].values*np.sin(self.chain["omega_p1"].values*np.pi/180.0))/(1.0 - self.chain["e_p1"].values**2.0)))*180.0/np.pi
+            val, mi, ma = get_vals(self.chain["inc_p1"].values)
+            self.vals["inc_p1"], self.err_up["inc_p1"], self.err_down["inc_p1"] = val, ma, mi
+            print("inc_p1:",val, mi, ma)
+        if self.priors.true_obliquity_param:
+            self.chain["veq_star"] = (2.0*np.pi*self.chain["r_star"].values*u.Rsun/self.chain["Prot_star"].values/u.d).to(u.km/u.s).value
+            self.chain["vsini_star"] = self.chain["veq_star"].values*np.sqrt(1.0-self.chain["cosi_star"].values**2.0)
+            self.chain["psi_p1"] = np.arccos(self.chain["cosi_star"].values*np.cos(self.chain["inc_p1"].values*np.pi/180.0) + np.sqrt(1.0-self.chain["cosi_star"].values**2.0)*np.sin(self.chain["inc_p1"].values*np.pi/180.0)*np.cos(self.chain["lam_p1"].values*np.pi/180.0))*180.0/np.pi
+            val, mi, ma = get_vals(self.chain["veq_star"].values)
+            self.vals["veq_star"], self.err_up["veq_star"], self.err_down["veq_star"] = val, ma, mi
+            print("veq_star:",val, mi, ma)
+            val, mi, ma = get_vals(self.chain["vsini_star"].values)
+            self.vals["vsini_star"], self.err_up["vsini_star"], self.err_down["vsini_star"] = val, ma, mi
+            print("vsini_star:",val, mi, ma)
+            val, mi, ma = get_vals(self.chain["psi_p1"].values)
+            self.vals["psi_p1"], self.err_up["psi_p1"], self.err_down["psi_p1"] = val, ma, mi
+            print("psi_p1:",val, mi, ma)
+            
     def find_fixed_or_chain(self,parameter):
         if parameter in self.chain.columns:
             return self.chain[parameter].values
         else:
             return float(self.priors.dct[parameter][1][0])
-    
-    def derive_sma_and_inc(self):
-        rho = self.find_fixed_or_chain("rho_star")
-        P = self.find_fixed_or_chain("per_p1")
-        b = self.find_fixed_or_chain("b_p1")
-        e = self.find_fixed_or_chain("e_p1")
-        w = self.find_fixed_or_chain("omega_p1")
-        aRs = ((c.G*((P*u.d)**2.0)*(rho*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
-        inc = np.arccos(b/aRs*((1+e*np.sin(w*np.pi/180.0))/(1.0 - e**2.0)))*180.0/np.pi
-        val, mi, ma = get_vals(aRs)
-        print("aRs_p1:",val, mi, ma)
-        self.vals["sma_p1"], self.err_up["sma_p1"], self.err_down["sma_p1"] = val, ma, mi
-        val, mi, ma = get_vals(inc)
-        print("inc_p1 (deg):",val, mi, ma)
-        self.vals["inc_p1"], self.err_up["inc_p1"], self.err_down["inc_p1"] = val, ma, mi
-        self.chain["sma_p1"] = aRs
-        self.chain["inc_p1"] = inc
         
     def print_mass_radius_rho_sma_planet(self,rstar,mstar):
         Rs = np.random.normal(rstar[0],rstar[1],len(self.chain))*u.Rsun
@@ -333,7 +381,7 @@ class Post:
         rp = self.find_fixed_or_chain("p_p1")*Rs
         rp = rp.to(u.Rjup)
         print("R_planet (Rjup):",get_vals(rp.value))
-        aRs = self.find_fixed_or_chain("sma_p1")
+        aRs = self.find_fixed_or_chain("aRs_p1")
         sma = (aRs*Rs).to(u.AU)
         print("Sma_planet (au):",get_vals(sma.value))
         K = self.find_fixed_or_chain("K_p1")*u.m/u.s
@@ -345,231 +393,49 @@ class Post:
         dens = 3.0*mp/4.0/np.pi/rp**3.0
         dens = dens.to(u.kg/u.m/u.m/u.m)
         print("Rho_planet (gr/cm3):",get_vals(dens.value/1000.0))
-        
-    def Plot_RM_all(self,colors,ms = 15,mw = 1, number_models = 5000):
-        rcParams["figure.figsize"] = (24,18)
-        fig = plt.figure(constrained_layout=True)
-        gs = fig.add_gridspec(4, 3)
-        ax1 = fig.add_subplot(gs[:3, :])
-        ax2 = fig.add_subplot(gs[3, :], sharex=ax1)
-        for instrument in self.data.rm_instruments:
-            necessary_params = {k: self.vals[k] for k in ('lam_p1','vsini_star','per_p1','t0_p1','p_p1','e_p1','omega_p1','K_p1','sma_p1','inc_p1','u1_'+instrument,'u2_'+instrument,'beta_'+instrument,'gamma_'+instrument, 'sigma_'+instrument)}
-            lam, vsini, P, t0, RpRs, e, w, K, aRs, inc, u1, u2, beta, gamma, jitter = necessary_params.values()
-            times1 = np.linspace(self.data.x[instrument][0]-0.02,self.data.x[instrument][-1]+0.02,5000)
-            error = np.sqrt(self.data.yerr[instrument]**2.0 + jitter**2.0)
-            phase = ((self.data.x[instrument]-t0 + 0.5*P) % P)/P
-            ax1.errorbar(phase,self.data.y[instrument]- rmfit.get_rv_curve(self.data.x[instrument],P,t0,e,w,K,plot=False,verbose=False) - gamma,error,label = instrument,mfc=colors[instrument],mec='k',ecolor='k',marker='o',elinewidth=1,capsize=4,lw=0,mew=mw,markersize=ms,zorder=10)
-            RM = rmfit.RMHirano(lam,vsini,P,t0,aRs,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic")
-            res = self.data.y[instrument]-(RM.evaluate(self.data.x[instrument]) + rmfit.get_rv_curve(self.data.x[instrument],P,t0,e,w,K,plot=False,verbose=False) + gamma)    
-            ax2.errorbar(phase,res,error,mfc=colors[instrument],mec='k',ecolor='k',marker='o',elinewidth=1,capsize=4,lw=0,mew=mw,markersize=ms,zorder=10)
-            model = RM.evaluate(times1)    
-            phase1 = ((times1-t0 + 0.5*P) % P)/P
-            ax1.plot(phase1,model,color="crimson", linewidth = 3)
-            ax2.axhline(0.0, color="crimson", linewidth=3)
-        
-        keplerian = rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False) + gamma 
-        mmodel1 = []
-        for i in range(number_models):
-            if i%100 == 0: print("Sampling i =",i,end="\r")
-            idx = np.random.randint(0,len(self.chain))
-            chain_models = self.chain[['lam_p1','vsini_star','per_p1','t0_p1','p_p1','e_p1','omega_p1','K_p1','sma_p1','inc_p1','u1_'+instrument,'u2_'+instrument,'beta_'+instrument,'gamma_'+instrument]]
-            lam, vsini, P, t0, RpRs, e, w, K, aRs, inc, u1, u2, beta, gamma = chain_models.values[idx]
-            RM = rmfit.RMHirano(lam,vsini,P,t0,aRs,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic")
-            m1 = RM.evaluate(times1) + rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False) + gamma
-            mmodel1.append(m1-keplerian)
-        mmodel1 = np.array(mmodel1)
-        ax1.fill_between(phase1,np.quantile(mmodel1,0.16,axis=0),np.quantile(mmodel1,0.84,axis=0),alpha=0.1,color="r",lw=0,zorder=-1)
-        ax1.fill_between(phase1,np.quantile(mmodel1,0.02,axis=0),np.quantile(mmodel1,0.98,axis=0),alpha=0.1,color="r",lw=0,zorder=-1)
-        ax1.fill_between(phase1,np.quantile(mmodel1,0.0015,axis=0),np.quantile(mmodel1,0.9985,axis=0),alpha=0.1,color="r",lw=0,zorder=-1)
-        ax1.set_ylabel('RV [m/s]',labelpad=10,size=45)
-        ax1.tick_params(axis="both",direction="in",length=15,width=1)
-        ax1.tick_params(axis="x",which="minor",direction="in",length=5,width=1)
-        ax1.tick_params(axis="y",which="minor",direction="in",length=5,width=1)
-        rmfit.utils.ax_apply_settings(ax1,ticksize=35)
-        plt.setp(ax1.get_xticklabels(), visible=False)
-        ax2.set_xlabel('Phase',labelpad=10,size=45)
-        ax2.set_ylabel('O - C',labelpad=10,size=45)
-        ax2.tick_params(axis="both",direction="in",length=15,width=1)
-        ax2.tick_params(axis="x",which="minor",direction="in",length=5,width=1)
-        ax2.tick_params(axis="y",which="minor",direction="in",length=5,width=1)
-        rmfit.utils.ax_apply_settings(ax2,ticksize=35)
-        plt.tight_layout()
-        fig.legend(loc="upper center",fancybox=True,bbox_to_anchor=(0.5, 1.09),shadow=False,fontsize=45,ncol=len(self.data.rm_instruments))
-        plt.show()
-        
-    def Plot_RM_ind(self,instrument,tr_number,color = "dimgrey",ms = 15,mw = 1, number_models = 5000):
-        rcParams["figure.figsize"] = (24,18)
-        fig = plt.figure(constrained_layout=True)
-        gs = fig.add_gridspec(4, 3)
-        ax1 = fig.add_subplot(gs[:3, :])
-        ax2 = fig.add_subplot(gs[3, :], sharex=ax1)
-        necessary_params = {k: self.vals[k] for k in ('lam_p1','vsini_star','per_p1','t0_p1','p_p1','e_p1','omega_p1','K_p1','sma_p1','inc_p1','u1_'+instrument,'u2_'+instrument,'beta_'+instrument,'gamma_'+instrument, 'sigma_'+instrument)}
-        lam, vsini, P, t0, RpRs, e, w, K, aRs, inc, u1, u2, beta, gamma, jitter = necessary_params.values()
-        times1 = np.linspace(self.data.x[instrument][0]-0.02,self.data.x[instrument][-1]+0.02,1000)
+
+    def evaluate_RV_model(self,times1,instrument,models=False,number_models=5000):
+        necessary_params = {k: self.vals[k] for k in ('per_p1','t0_p1','e_p1','omega_p1','K_p1','gamma_'+instrument,'gammadot','gammadotdot')}
+        P, t0, e, w, K, gamma, gammadot, gammadotdot = necessary_params.values()
+        rv_trend = gammadot*(times1-t0) + gammadotdot*(times1-t0)**2.0
+        rv_model = rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False)
+        if models:
+            mmodel1 = []
+            for i in range(number_models):
+                if i%100 == 0: print("Sampling i =",i,end="\r")
+                idx = np.random.randint(0,len(self.chain))
+                chain_models = self.chain[['per_p1','t0_p1','e_p1','omega_p1','K_p1','gamma_'+instrument]]
+                P, t0, e, w, K, gamma = chain_models.values[idx]
+                m1 = rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False)
+                mmodel1.append(m1)
+            mmodel1 = np.array(mmodel1)
+            return rv_model, rv_trend, gamma, mmodel1
+        return rv_model, rv_trend, gamma
+
+    def evaluate_RM_model(self,times1,instrument,models=False,number_models=5000):
+        necessary_params = {k: self.vals[k] for k in ('lam_p1','vsini_star','per_p1','t0_p1','p_p1','e_p1','omega_p1','K_p1','aRs_p1','inc_p1','u1_'+instrument,'u2_'+instrument,'beta_'+instrument,'gamma_'+instrument, 'gammadot', 'gammadotdot','sigma_'+instrument)}
+        lam, vsini, P, t0, RpRs, e, w, K, aRs, inc, u1, u2, beta, gamma, gammadot, gammadotdot, jitter = necessary_params.values()
         error = np.sqrt(self.data.yerr[instrument]**2.0 + jitter**2.0)
-        #phase = ((self.data.x[instrument]-t0 + 0.5*P) % P)/P
-        ax1.errorbar((self.data.x[instrument]-t0-tr_number*P)*24.0,self.data.y[instrument]- rmfit.get_rv_curve(self.data.x[instrument],P,t0,e,w,K,plot=False,verbose=False) - gamma,error,label = instrument,mfc=color,mec='k',ecolor='k',marker='o',elinewidth=1,capsize=4,lw=0,mew=mw,markersize=ms,zorder=10)
         RM = rmfit.RMHirano(lam,vsini,P,t0,aRs,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic")
-        res = self.data.y[instrument]-(RM.evaluate(self.data.x[instrument]) + rmfit.get_rv_curve(self.data.x[instrument],P,t0,e,w,K,plot=False,verbose=False) + gamma)    
-        ax2.errorbar((self.data.x[instrument]-t0-tr_number*P)*24.0,res,error,mfc=color,mec='k',ecolor='k',marker='o',elinewidth=1,capsize=4,lw=0,mew=mw,markersize=ms,zorder=10)
-        model = RM.evaluate(times1)    
-        #phase1 = ((times1-t0 + 0.5*P) % P)/P
-        ax1.plot((times1-t0-tr_number*P)*24.0,model,color="crimson", linewidth = 3)
-        ax2.axhline(0.0, color="crimson", linewidth=3)
-        
-        keplerian = rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False) + gamma 
-        mmodel1 = []
-        for i in range(number_models):
-            if i%100 == 0: print("Sampling i =",i,end="\r")
-            idx = np.random.randint(0,len(self.chain))
-            chain_models = self.chain[['lam_p1','vsini_star','per_p1','t0_p1','p_p1','e_p1','omega_p1','K_p1','sma_p1','inc_p1','u1_'+instrument,'u2_'+instrument,'beta_'+instrument,'gamma_'+instrument]]
-            lam, vsini, P, t0, RpRs, e, w, K, aRs, inc, u1, u2, beta, gamma = chain_models.values[idx]
-            RM = rmfit.RMHirano(lam,vsini,P,t0,aRs,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic")
-            m1 = RM.evaluate(times1) + rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False) + gamma
-            mmodel1.append(m1-keplerian)
-        mmodel1 = np.array(mmodel1)
-        ax1.fill_between((times1-t0-tr_number*P)*24.0,np.quantile(mmodel1,0.16,axis=0),np.quantile(mmodel1,0.84,axis=0),alpha=0.1,color="r",lw=0,zorder=-1)
-        ax1.fill_between((times1-t0-tr_number*P)*24.0,np.quantile(mmodel1,0.02,axis=0),np.quantile(mmodel1,0.98,axis=0),alpha=0.1,color="r",lw=0,zorder=-1)
-        ax1.fill_between((times1-t0-tr_number*P)*24.0,np.quantile(mmodel1,0.0015,axis=0),np.quantile(mmodel1,0.9985,axis=0),alpha=0.1,color="r",lw=0,zorder=-1)
-        ax1.set_ylabel('RV [m/s]',labelpad=10,size=45)
-        ax1.tick_params(axis="both",direction="in",length=15,width=1)
-        ax1.tick_params(axis="x",which="minor",direction="in",length=5,width=1)
-        ax1.tick_params(axis="y",which="minor",direction="in",length=5,width=1)
-        rmfit.utils.ax_apply_settings(ax1,ticksize=35)
-        plt.setp(ax1.get_xticklabels(), visible=False)
-        ax2.set_xlabel('Hours from mid-transit',labelpad=10,size=45)
-        ax2.set_ylabel('O - C',labelpad=10,size=45)
-        ax2.tick_params(axis="both",direction="in",length=15,width=1)
-        ax2.tick_params(axis="x",which="minor",direction="in",length=5,width=1)
-        ax2.tick_params(axis="y",which="minor",direction="in",length=5,width=1)
-        rmfit.utils.ax_apply_settings(ax2,ticksize=35)
-        plt.tight_layout()
-        plt.show()
-    
-    def Plot_RVs_phase(self,colors,ms = 15, mw = 1, number_models = 5000):
-        rcParams["figure.figsize"] = (24,18)
-        fig = plt.figure(constrained_layout=True)
-        gs = fig.add_gridspec(4, 3)
-        ax1 = fig.add_subplot(gs[:3, :])
-        ax2 = fig.add_subplot(gs[3, :], sharex=ax1)
-        for instrument in self.data.rv_instruments:
-            necessary_params = {k: self.vals[k] for k in ('per_p1','t0_p1','e_p1','omega_p1','K_p1','gamma_'+instrument,'sigma_'+instrument)}
-            P, t0, e, w, K, gamma, jitter = necessary_params.values()
-            phase = ((self.data.x[instrument]-t0 + 0.5*P) % P)/P
-            data = self.data.y[instrument] - gamma
-            error = np.sqrt(self.data.yerr[instrument]**2.0 + jitter**2.0)
-            ax1.errorbar(phase,data,error,label = instrument,mfc=colors[instrument],mec='k',ecolor='k',marker='o',elinewidth=1,capsize=4,lw=0,mew=mw,markersize=ms,zorder=10)
-            res = data - rmfit.get_rv_curve(phase,1,0.5,e,w,K,plot=False,verbose=False)
-            ax2.errorbar(phase,res,error,mfc=colors[instrument],mec='k',ecolor='k',marker='o',elinewidth=1,capsize=4,lw=0,mew=mw,markersize=ms,zorder=10)
-        times1 = np.linspace(0,1,5000)
-        rv_model = rmfit.get_rv_curve(times1,1,0.5,e,w,K,plot=False,verbose=False)
-        ax1.plot(times1,rv_model,color="crimson",linewidth = 3)
-        ax2.axhline(0,color="crimson",linewidth = 3)
-        
-        mmodel1 = []
-        for i in range(number_models):
-            if i%100 == 0: print("Sampling i =",i,end="\r")
-            idx = np.random.randint(0,len(self.chain))
-            chain_models = self.chain[['per_p1','t0_p1','e_p1','omega_p1','K_p1','gamma_'+instrument,'sigma_'+instrument]]
-            P, t0, e, w, K, gamma, jitter = chain_models.values[idx]
-            m1 = rmfit.get_rv_curve(times1,1,0.5,e,w,K,plot=False,verbose=False)
-            mmodel1.append(m1)
-        mmodel1 = np.array(mmodel1)
-        ax1.fill_between(times1,np.quantile(mmodel1,0.16,axis=0),np.quantile(mmodel1,0.84,axis=0),alpha=0.1,color="r",lw=0,zorder=10)
-        ax1.fill_between(times1,np.quantile(mmodel1,0.02,axis=0),np.quantile(mmodel1,0.98,axis=0),alpha=0.1,color="r",lw=0,zorder=10)
-        ax1.fill_between(times1,np.quantile(mmodel1,0.0015,axis=0),np.quantile(mmodel1,0.9985,axis=0),alpha=0.1,color="r",lw=0,zorder=10)
-        
-        ax1.set_ylabel('RV [m/s]',labelpad=10,size=45)
-        ax1.tick_params(axis="both",direction="in",length=15,width=1)
-        ax1.tick_params(axis="x",which="minor",direction="in",length=5,width=1)
-        ax1.tick_params(axis="y",which="minor",direction="in",length=5,width=1)
-        rmfit.utils.ax_apply_settings(ax1,ticksize=35)
-        plt.setp(ax1.get_xticklabels(), visible=False)
-        ax2.set_xlim(0,1)
-        ax2.set_xticks([0.2,0.4,0.6,0.8])
-        ax2.set_xlabel('Phase',labelpad=10,size=45)
-        ax2.set_ylabel('O - C',labelpad=10,size=45)
-        ax2.tick_params(axis="both",direction="in",length=15,width=1)
-        ax2.tick_params(axis="x",which="minor",direction="in",length=5,width=1)
-        ax2.tick_params(axis="y",which="minor",direction="in",length=5,width=1)
-        rmfit.utils.ax_apply_settings(ax2,ticksize=35)
-        plt.tight_layout()
-        fig.legend(loc="upper center",fancybox=True,bbox_to_anchor=(0.5, 1.09),shadow=False,fontsize=45,ncol=len(self.data.rv_instruments))
-        plt.show()
-    
-    def Plot_RVs_time(self,colors,ms = 15, mw = 1, number_models = 5000):
-        rcParams["figure.figsize"] = (24,18)
-        fig = plt.figure(constrained_layout=True)
-        gs = fig.add_gridspec(4, 3)
-        ax1 = fig.add_subplot(gs[:3, :])
-        ax2 = fig.add_subplot(gs[3, :], sharex=ax1)
-        for instrument in self.data.rv_instruments:
-            necessary_params = {k: self.vals[k] for k in ('per_p1','t0_p1','e_p1','omega_p1','K_p1','gamma_'+instrument,'sigma_'+instrument)}
-            P, t0, e, w, K, gamma, jitter = necessary_params.values()
-            data = self.data.y[instrument] - gamma
-            error = np.sqrt(self.data.yerr[instrument]**2.0 + jitter**2.0)
-            ax1.errorbar(self.data.x[instrument],data,error,label = instrument,mfc=colors[instrument],mec='k',ecolor='k',marker='o',elinewidth=1,capsize=4,lw=0,mew=mw,markersize=ms,zorder=10)
-            res = data - rmfit.get_rv_curve(self.data.x[instrument],P,t0,e,w,K,plot=False,verbose=False)
-            ax2.errorbar(self.data.x[instrument],res,error,mfc=colors[instrument],mec='k',ecolor='k',marker='o',elinewidth=1,capsize=4,lw=0,mew=mw,markersize=ms,zorder=10)
-        
-        bjds = np.array([])
-        for instrument in self.data.rv_instruments:
-            bjds = np.concatenate((bjds,self.data.x[instrument]))
-        rv_times = np.linspace(min(bjds)-10,max(bjds)+10,5000)
-        rv_model = rmfit.get_rv_curve(rv_times,P,t0,e,w,K,plot=False,verbose=False)
-        ax1.plot(rv_times,rv_model,color="crimson", linewidth = 3)
-        ax2.axhline(0,color="crimson",linewidth = 3)
-        
-        ax1.set_ylabel('RV [m/s]',labelpad=10,size=45)
-        ax1.tick_params(axis="both",direction="in",length=15,width=1)
-        ax1.tick_params(axis="x",which="minor",direction="in",length=5,width=1)
-        ax1.tick_params(axis="y",which="minor",direction="in",length=5,width=1)
-        rmfit.utils.ax_apply_settings(ax1,ticksize=35)
-        plt.setp(ax1.get_xticklabels(), visible=False)
-        ax2.set_xlabel('Time [BJD]',labelpad=10,size=45)
-        ax2.set_ylabel('O - C',labelpad=10,size=45)
-        ax2.tick_params(axis="both",direction="in",length=15,width=1)
-        ax2.tick_params(axis="x",which="minor",direction="in",length=5,width=1)
-        ax2.tick_params(axis="y",which="minor",direction="in",length=5,width=1)
-        rmfit.utils.ax_apply_settings(ax2,ticksize=35)
-        plt.tight_layout()
-        fig.legend(loc="upper center",fancybox=True,bbox_to_anchor=(0.5, 1.09),shadow=False,fontsize=45,ncol=len(self.data.rv_instruments))
-        plt.show() 
-        
-    def Plot_LC(self,instrument,color = "cornflowerblue",ms = 15, mw = 1,xlim=(0.45,0.55),ylim1=(0.98,1.02),ylim2=(-0.01,0.01),title = "",xticks=np.linspace(0.485,0.515,7)):
-        rcParams["figure.figsize"] = (16,9)
-        fig = plt.figure(constrained_layout=True)
-        gs = fig.add_gridspec(3, 1)
-        ax1 = fig.add_subplot(gs[:2, 0])
-        ax2 = fig.add_subplot(gs[2, 0], sharex = ax1)
-        necessary_params = {k: self.vals[k] for k in ('per_p1','t0_p1','p_p1','e_p1','omega_p1','K_p1','sma_p1','inc_p1','u1_'+instrument,'u2_'+instrument, 'sigma_'+instrument)}
-        P, t0, RpRs, e, w, K, sma, inc, u1, u2, jitter = necessary_params.values()
-        phase = ((self.data.x[instrument]-t0 + 0.5*P) % P)/P
-        times1 = np.linspace(self.data.x[instrument][0],self.data.x[instrument][-1],2000)
-        error = np.sqrt(self.data.yerr[instrument]**2.0 + jitter**2.0)
-        ax1.errorbar(phase,self.data.y[instrument],error,marker='o',elinewidth=2,capsize=4,lw=0,mew=0.8,color=color,markersize=ms,alpha=1,zorder=5)
-        model = Transit(phase, 0.5, 1, RpRs, sma, inc, e, w, u1, u2)
-        ax2.errorbar(phase,self.data.y[instrument]-model,error,marker='o',elinewidth=1,capsize=2,lw=0,mew=0.5,color=color,markersize=ms,alpha=1,zorder=5)
-        model_phase = np.linspace(0,1,100000)
-        model = Transit(model_phase, 0.5, 1, RpRs, sma, inc, e, w, u1, u2)
-        ax1.plot(model_phase,model,color = "crimson", zorder = 10, linewidth=3)
-        ax2.axhline(0.0,color="crimson",zorder=10,linewidth=3)
-        
-        ax1.set_ylim(ylim1[0],ylim1[1])
-        ax1.set_title(title, fontsize = 40)
-        ax1.set_ylabel('Normalized Flux',labelpad=40,size=35)
-        ax1.tick_params(axis="both",direction="in",length=15,width=1)
-        ax1.tick_params(axis="x",which="minor",direction="in",length=5,width=1)
-        ax1.tick_params(axis="y",which="minor",direction="in",length=5,width=1)
-        rmfit.utils.ax_apply_settings(ax1,ticksize=25)
-        plt.setp(ax1.get_xticklabels(), visible=False)
-        ax2.set_ylim(ylim2[0],ylim2[1])
-        ax2.set_xlim(xlim[0],xlim[1])
-        ax2.set_xticks(xticks)
-        ax2.tick_params(axis="both",direction="in",length=15,width=1)
-        ax2.tick_params(axis="x",which="minor",direction="in",length=5,width=1)
-        ax2.tick_params(axis="y",which="minor",direction="in",length=5,width=1)
-        rmfit.utils.ax_apply_settings(ax2,ticksize=25)
-        ax2.set_xlabel('Phase',labelpad=10,size=35)
-        ax2.set_ylabel('O - C ',labelpad=10,size=35)
-        plt.show()
+        rv_trend = gammadot*(times1-t0) + gammadotdot*(times1-t0)**2.0
+        model = RM.evaluate(times1) + rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False) + gamma + rv_trend
+        if models:
+            mmodel1 = []
+            for i in range(number_models):
+                if i%100 == 0: print("Sampling i =",i,end="\r")
+                idx = np.random.randint(0,len(self.chain))
+                chain_models = self.chain[['lam_p1','vsini_star','per_p1','t0_p1','p_p1','e_p1','omega_p1','K_p1','aRs_p1','inc_p1','u1_'+instrument,'u2_'+instrument,'beta_'+instrument,'gamma_'+instrument, 'gammadot', 'gammadotdot']]
+                lam, vsini, P, t0, RpRs, e, w, K, aRs, inc, u1, u2, beta, gamma, gammadot, gammadotdot = chain_models.values[idx]
+                rv_trend = gammadot*(times1-t0) + gammadotdot*(times1-t0)**2.0
+                RM = rmfit.RMHirano(lam,vsini,P,t0,aRs,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic")
+                m1 = RM.evaluate(times1) + rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False) + gamma + rv_trend
+                mmodel1.append(m1)
+            mmodel1 = np.array(mmodel1)
+            return model, mmodel1
+        return model
+
+    def evaluate_LC_model(self,times1,instrument):
+        necessary_params = {k: self.vals[k] for k in ('per_p1','t0_p1','p_p1','e_p1','omega_p1','K_p1','aRs_p1','inc_p1','u1_'+instrument,'u2_'+instrument)}
+        P, t0, RpRs, e, w, K, sma, inc, u1, u2 = necessary_params.values()
+        model = Transit(times1, t0, P, RpRs, sma, inc, e, w, u1, u2)
+        return model
