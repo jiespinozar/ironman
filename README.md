@@ -12,10 +12,7 @@ Required packages:
 - batman-package (pip install batman-package)
 - rmfit (and its dependencies, install from here: https://github.com/gummiks/rmfit)
 - dynesty (pip install dynesty)
-- contextlib 
-- multiprocessing
 - astropy (pip install astropy)
-- itertools
 
 # Installation
 
