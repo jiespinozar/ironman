@@ -25,6 +25,7 @@ You should be able to do the following:
 git clone https://github.com/jiespinozar/ironman
 cd ironman
 python setup.py install
+```
 
 # Examples
 
