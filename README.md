@@ -36,4 +36,4 @@ To see examples of the usage of this module, see the example notebooks in the Ex
 
 # Citation
 
-If you make use of this code, please cite [Espinoza-Retamal et al 2024](https://ui.adsabs.harvard.edu/abs/2023ApJ...958L..20E/abstract)
+If you make use of this code, please cite [Espinoza-Retamal et al. 2024](https://ui.adsabs.harvard.edu/abs/2023ApJ...958L..20E/abstract)
