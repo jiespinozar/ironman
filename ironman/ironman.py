@@ -50,19 +50,19 @@ def q1_q2_from_u1_u2(u1,u2):
     q1, q2 = (u1 + u2)**2. , u1/(2.*(u1+u2))
     return q1, q2
 
-def Transit(bjd, t0, P, RpRs, sma, inc, e, w, u1, u2):                 #Tierra
+def Transit(bjd, t0, P, RpRs, sma, inc, e, w, u1, u2):                
     params = batman.TransitParams()
-    params.t0 = t0                  #epoch of mid-transit
-    params.per = P                  #orbital period
-    params.rp = RpRs                 #planet radius (in units of stellar radii)
-    params.a =  sma              #semi-major axis (in units of stellar radii)
-    params.inc =  inc            #orbital inclination (in degrees)
-    params.ecc = e                     #eccentricity
-    params.w = w                       #longitude of periastron (in degrees)
-    params.u = [u1,u2]              #limb darkening coefficients [u1, u2]
-    params.limb_dark = "quadratic"       #limb darkening model
-    m = batman.TransitModel(params, bjd)    #initializes model
-    flux_lc = m.light_curve(params)          #calculates light curve
+    params.t0 = t0                  
+    params.per = P                  
+    params.rp = RpRs                 
+    params.a =  sma              
+    params.inc =  inc            
+    params.ecc = e                     
+    params.w = w                       
+    params.u = [u1,u2]              
+    params.limb_dark = "quadratic"       
+    m = batman.TransitModel(params, bjd)   
+    flux_lc = m.light_curve(params)        
     return flux_lc
 
 def create_RM_data(bjd,dct_params):
@@ -238,14 +238,8 @@ class Fit:
         u2 = dct_params["u2_"+inst]
         sma = dct_params["aRs_p1"]
         inc = dct_params["inc_p1"]
-        if "gammadot_"+inst in dct_params:
-            gammadot = dct_params["gammadot_"+inst]
-        else:
-            gammadot = dct_params["gammadot"]
-        if "gammadotdot_"+inst in dct_params:
-            gammadotdot = dct_params["gammadotdot_"+inst]
-        else:
-            gammadotdot = dct_params["gammadotdot"]
+        gammadot = dct_params["gammadot"]
+        gammadotdot = dct_params["gammadotdot"]
         rv_trend = gammadot*(bjd-t0) + gammadotdot*(bjd-t0)**2.0
         if self.data.exp_times[inst] != False:
             RM = rmfit.RMHirano(lam,vsini,P,t0,sma,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic",supersample_factor=10,exp_time=float(self.data.exp_times[inst]))
