@@ -309,8 +309,6 @@ class Fit:
             sampler = DynamicNestedSampler(self.LogLike, self.priors_transform, self.ndim, bound=bound, sample=sample , nlive = n_live, pool=executor, queue_size=nthreads, bootstrap = 0)
             sampler.run_nested()
             res = sampler.results
-            #logZ = res['logz'][-1]
-            #print("LogZ: ", logZ)
             weights = np.exp(res['logwt'] - res['logz'][-1])
             self.postsamples = resample_equal(res.samples, weights)
         return self.postsamples
