@@ -119,6 +119,8 @@ class Data_Org:
         self.x = dict(itertools.chain(self.lc_time.items(),self.rv_time.items(),self.rm_time.items()))
         self.y = dict(itertools.chain(self.lc_flux.items(),self.rv.items(),self.rm.items()))
         self.yerr = dict(itertools.chain(self.lc_flux_err.items(),self.rv_err.items(),self.rm_err.items()))
+        if verbose:
+            print("Data Ready!")
 
 class Priors:
     def __init__(self,file_,data,verbose = True):
