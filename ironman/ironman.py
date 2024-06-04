@@ -284,7 +284,6 @@ class Fit:
                 dct_i[parameter] = val
                 
         for inst in np.concatenate((self.data.lc_instruments,self.data.rm_instruments)):
-            print(inst)
             search_key = "_"+inst
             inst_params = [val for key, val in dct_i.items() if search_key in key]
             dct_i["q1_"+inst] = float(inst_params[0])
