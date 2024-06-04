@@ -209,6 +209,10 @@ class Fit:
         gamma = dct_params["gamma_"+inst]
         gammadot = dct_params["gammadot"]
         gammadotdot = dct_params["gammadotdot"]
+        if "gammadot_"+inst in dct_params:
+            gammadot = dct_params["gammadot_"+inst]
+        if "gammadotdot_"+inst in dct_params:
+            gammadotdot = dct_params["gammadotdot_"+inst]
         if self.ta != None:
             ta = self.ta
         else:
