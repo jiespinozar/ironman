@@ -172,11 +172,12 @@ class Priors:
             print("Something went wrong with the obliquity parametrization. Please check the parameters. For deriving the true obliquity include cosi_star, Prot_star, and r_star. For the sky-projected obliquity include vsini_star.")
 
 class Fit:
-    def __init__(self,data,priors):
+    def __init__(self,data,priors,ta=None):
         self.data = data
         self.priors = priors
         self.ndim = len(self.priors.varyin_parameters)
-
+        self.ta = ta
+        
     def priors_transform(self,params):
             tranformed_values = []
             for index,parameter in enumerate(self.priors.varyin_parameters):
@@ -206,7 +207,11 @@ class Fit:
         gamma = dct_params["gamma_"+inst]
         gammadot = dct_params["gammadot"]
         gammadotdot = dct_params["gammadotdot"]
-        rv_trend = gammadot*(bjd-t0) + gammadotdot*(bjd-t0)**2.0
+        if self.ta != None:
+            ta = self.ta
+        else:
+            ta = t0
+        rv_trend = gammadot*(bjd-ta) + gammadotdot*(bjd-ta)**2.0
         rv_model = rmfit.get_rv_curve(bjd,P,t0,e,w,K,plot=False,verbose=False)+gamma+rv_trend
         return rv_model
     
@@ -252,7 +257,11 @@ class Fit:
             gammadot = dct_params["gammadot_"+inst]
         if "gammadotdot_"+inst in dct_params:
             gammadotdot = dct_params["gammadotdot_"+inst]
-        rv_trend = gammadot*(bjd-t0) + gammadotdot*(bjd-t0)**2.0
+        if self.ta != None:
+            ta = self.ta
+        else:
+            ta = t0
+        rv_trend = gammadot*(bjd-ta) + gammadotdot*(bjd-ta)**2.0
         if self.data.exp_times[inst] != False:
             RM = rmfit.RMHirano(lam,vsini,P,t0,sma,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic",supersample_factor=10,exp_time=float(self.data.exp_times[inst]))
             RM_model = RM.evaluate(bjd) + rmfit.get_rv_curve(bjd,P,t0,e,w,K,plot=False,verbose=False) + gamma + rv_trend
@@ -422,7 +431,11 @@ class Post:
             gammadot = self.vals['gammadot_'+instrument]
         if 'gammadotdot_'+instrument in self.vals:
             gammadotdot = self.vals['gammadotdot_'+instrument]
-        rv_trend = gammadot*(times1-t0) + gammadotdot*(times1-t0)**2.0
+        if self.fit.ta != None:
+            ta = self.fit.ta
+        else:
+            ta = t0
+        rv_trend = gammadot*(times1-ta) + gammadotdot*(times1-ta)**2.0
         rv_model = rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False)
         if models:
             mmodel1 = []
@@ -444,9 +457,13 @@ class Post:
             gammadot = self.vals['gammadot_'+instrument]
         if 'gammadotdot_'+instrument in self.vals:
             gammadotdot = self.vals['gammadotdot_'+instrument]
+        if self.fit.ta != None:
+            ta = self.fit.ta
+        else:
+            ta = t0
+        rv_trend = gammadot*(times1-ta) + gammadotdot*(times1-ta)**2.0
         error = np.sqrt(self.data.yerr[instrument]**2.0 + jitter**2.0)
         RM = rmfit.RMHirano(lam,vsini,P,t0,aRs,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic")
-        rv_trend = gammadot*(times1-t0) + gammadotdot*(times1-t0)**2.0
         model = RM.evaluate(times1) + rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False) + gamma + rv_trend
         if models:
             mmodel1 = []
@@ -455,7 +472,7 @@ class Post:
                 idx = np.random.randint(0,len(self.chain))
                 chain_models = self.chain[['lam_p1','vsini_star','per_p1','t0_p1','p_p1','e_p1','omega_p1','K_p1','aRs_p1','inc_p1','u1_'+instrument,'u2_'+instrument,'beta_'+instrument,'gamma_'+instrument, 'gammadot', 'gammadotdot']]
                 lam, vsini, P, t0, RpRs, e, w, K, aRs, inc, u1, u2, beta, gamma, gammadot, gammadotdot = chain_models.values[idx]
-                rv_trend = gammadot*(times1-t0) + gammadotdot*(times1-t0)**2.0
+                rv_trend = gammadot*(times1-ta) + gammadotdot*(times1-ta)**2.0
                 RM = rmfit.RMHirano(lam,vsini,P,t0,aRs,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic")
                 m1 = RM.evaluate(times1) + rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False) + gamma + rv_trend
                 mmodel1.append(m1)
