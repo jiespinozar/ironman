@@ -5,8 +5,8 @@ t0_p1 				normal		2456870.958271442,0.0003619068
 rho_star 			normal		2250.0,140.0
 b_p1 				uniform		0.0,1.0
 p_p1 				uniform		0.0,1.0
-e_p1 				FIXED       0.0
-omega_p1 			FIXED		90.0
+e_p1 				uniform		0.0,0.95
+omega_p1 			uniform		0.0,360.0
 K_p1				uniform		0.0,1000.0
 q1_TESSY1_TESSY2	uniform		0.0,1.0
 q2_TESSY1_TESSY2	uniform		0.0,1.0
