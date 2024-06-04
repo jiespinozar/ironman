@@ -50,19 +50,19 @@ def q1_q2_from_u1_u2(u1,u2):
     q1, q2 = (u1 + u2)**2. , u1/(2.*(u1+u2))
     return q1, q2
 
-def Transit(bjd, t0, P, RpRs, sma, inc, e, w, u1, u2):                
+def Transit(bjd, t0, P, RpRs, sma, inc, e, w, u1, u2):                 #Tierra
     params = batman.TransitParams()
-    params.t0 = t0                  
-    params.per = P                  
-    params.rp = RpRs                 
-    params.a =  sma              
-    params.inc =  inc            
-    params.ecc = e                     
-    params.w = w                       
-    params.u = [u1,u2]              
-    params.limb_dark = "quadratic"       
-    m = batman.TransitModel(params, bjd)   
-    flux_lc = m.light_curve(params)        
+    params.t0 = t0                  #epoch of mid-transit
+    params.per = P                  #orbital period
+    params.rp = RpRs                 #planet radius (in units of stellar radii)
+    params.a =  sma              #semi-major axis (in units of stellar radii)
+    params.inc =  inc            #orbital inclination (in degrees)
+    params.ecc = e                     #eccentricity
+    params.w = w                       #longitude of periastron (in degrees)
+    params.u = [u1,u2]              #limb darkening coefficients [u1, u2]
+    params.limb_dark = "quadratic"       #limb darkening model
+    m = batman.TransitModel(params, bjd)    #initializes model
+    flux_lc = m.light_curve(params)          #calculates light curve
     return flux_lc
 
 def create_RM_data(bjd,dct_params):
@@ -148,14 +148,22 @@ class Priors:
                 varying.append(parameter)
         self.fixed_parameters = fixed
         self.varyin_parameters = varying
-        if "rho_star" in self.parameters:
+        
+        if "r_star" in self.parameters and "m_star" in self.parameters:
+            self.m_star_param = True
+            self.rho_param = True
+        elif "rho_star" in self.parameters:
+            self.m_star_param = False
             self.rho_param = True
         else:
+            self.m_star_param = False
             self.rho_param = False
+    
         if "b_p1" in self.parameters:
             self.b_param = True
         else:
             self.b_param = False
+
         if "vsini_star" in self.parameters:
             self.true_obliquity_param = False
         elif "cosi_star" in self.parameters and "Prot_star" in self.parameters and "r_star" in self.parameters:
@@ -240,10 +248,14 @@ class Fit:
         inc = dct_params["inc_p1"]
         gammadot = dct_params["gammadot"]
         gammadotdot = dct_params["gammadotdot"]
+        if "gammadot_"+inst in dct_params:
+            gammadot = dct_params["gammadot_"+inst]
+        if "gammadotdot_"+inst in dct_params:
+            gammadotdot = dct_params["gammadotdot_"+inst]
         rv_trend = gammadot*(bjd-t0) + gammadotdot*(bjd-t0)**2.0
         if self.data.exp_times[inst] != False:
             RM = rmfit.RMHirano(lam,vsini,P,t0,sma,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic",supersample_factor=10,exp_time=float(self.data.exp_times[inst]))
-            RM_model = RM.evaluate(bjd) + rmfit.get_rv_curve(bjd,P,t0,e,w,K,plot=False,verbose=False)+gamma+rv_trend
+            RM_model = RM.evaluate(bjd) + rmfit.get_rv_curve(bjd,P,t0,e,w,K,plot=False,verbose=False) + gamma + rv_trend
         else:
             print("No exp_time for instrument:", inst)
             return False
@@ -271,20 +283,30 @@ class Fit:
                 val = float(self.priors.dct[parameter][1][0])
                 dct_i[parameter] = val
                 
-        for inst in self.data.lc_instruments:
+        for inst in np.concatenate((self.data.lc_instruments,self.data.rm_instruments)):
+            print(inst)
             search_key = "_"+inst
             inst_params = [val for key, val in dct_i.items() if search_key in key]
-            dct_i["q1_"+inst] = inst_params[0]
-            dct_i["q2_"+inst] = inst_params[1]
+            dct_i["q1_"+inst] = float(inst_params[0])
+            dct_i["q2_"+inst] = float(inst_params[1])
             dct_i["u1_"+inst], dct_i["u2_"+inst] = u1_u2_from_q1_q2(float(dct_i["q1_"+inst]),float(dct_i["q2_"+inst]))
-        for inst in self.data.rm_instruments:
-            search_key = "_"+inst
-            inst_params = [val for key, val in dct_i.items() if search_key in key]
-            dct_i["q1_"+inst] = inst_params[0]
-            dct_i["q2_"+inst] = inst_params[1]
-            dct_i["u1_"+inst], dct_i["u2_"+inst] = u1_u2_from_q1_q2(float(dct_i["q1_"+inst]),float(dct_i["q2_"+inst]))
-            dct_i["beta_"+inst] = inst_params[2]
-            dct_i["gamma_"+inst] = inst_params[3]
+            dct_i["sigma_"+inst] = float(inst_params[2])
+            if inst in self.data.rm_instruments:
+                dct_i["beta_"+inst] = float(inst_params[2])
+                dct_i["gamma_"+inst] = float(inst_params[3])
+                dct_i["sigma_"+inst] = float(inst_params[4])
+                if len(inst_params) == 6:
+                    if "gammadot_"+inst in dct_i:
+                        dct_i["gammadot_"+inst] = float(inst_params[5])
+                    else:
+                        dct_i["gammadotdot_"+inst] = float(inst_params[5])
+                elif len(inst_params) > 6:
+                    dct_i["gammadot_"+inst] = float(inst_params[5])
+                    dct_i["gammadotdot_"+inst] = float(inst_params[6])
+
+        if self.priors.m_star_param:
+            volume = 4.0/3.0*np.pi*(dct_i["r_star"]**3.0)*(u.Rsun**3.0)
+            dct_i["rho_star"] = (dct_i["m_star"]*u.Msun/volume).to(u.kg/u.m/u.m/u.m).value
         if self.priors.rho_param:     
             dct_i["aRs_p1"] = ((c.G*((dct_i["per_p1"]*u.d)**2.0)*(dct_i["rho_star"]*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
         if self.priors.b_param:    
@@ -314,7 +336,7 @@ class Fit:
         return self.postsamples
 
 class Post:
-    def __init__(self,data,priors,fit,chain):
+    def __init__(self,data,priors,fit,chain,print_params=False):
         self.data = data
         self.priors = priors
         self.chain = chain
@@ -326,75 +348,81 @@ class Post:
             print(parameter, val, mi, ma)
         self.chain = pd.DataFrame(data = self.chain, columns = self.priors.varyin_parameters)
         for i,parameter in enumerate(self.priors.fixed_parameters):
-            vals[parameter] = float(self.priors.dct[parameter][1][0])
+            vals[parameter], err_up[parameter], err_down[parameter] = float(self.priors.dct[parameter][1][0]), np.nan, np.nan,
             vals_to_chain = np.full(len(self.chain),float(self.priors.dct[parameter][1][0]))
             self.chain[parameter] = vals_to_chain
         self.vals = vals
         self.err_up = err_up
         self.err_down = err_down
+    
         for inst in np.concatenate((self.data.lc_instruments,self.data.rm_instruments)):
             search_key = "_"+inst
             inst_params = [s for s in self.chain.columns if search_key in s]
             self.chain["u1_"+inst],self.chain["u2_"+inst] = u1_u2_from_q1_q2(self.chain[inst_params[0]].values,self.chain[inst_params[1]].values)
-            self.vals["u1_"+inst] = get_vals(self.chain["u1_"+inst].values)[0]
-            self.vals["u2_"+inst] = get_vals(self.chain["u2_"+inst].values)[0]
+            self.vals["u1_"+inst], self.err_down["u1_"+inst], self.err_up["u1_"+inst] = get_vals(self.chain["u1_"+inst].values)
+            self.vals["u2_"+inst], self.err_down["u2_"+inst], self.err_up["u2_"+inst] = get_vals(self.chain["u2_"+inst].values)
             if inst in self.data.rm_instruments:
                 self.chain["beta_"+inst] = self.chain[inst_params[2]].values
                 self.chain["gamma_"+inst] = self.chain[inst_params[3]].values
-                self.vals["beta_"+inst] = get_vals(self.chain["beta_"+inst].values)[0]
-                self.vals["gamma_"+inst] = get_vals(self.chain["gamma_"+inst].values)[0]
+                self.vals["beta_"+inst], self.err_down["beta_"+inst], self.err_up["beta_"+inst] = get_vals(self.chain["beta_"+inst].values)
+                self.vals["gamma_"+inst], self.err_down["gamma_"+inst], self.err_up["gamma_"+inst] = get_vals(self.chain["gamma_"+inst].values)
+                
+        if self.priors.m_star_param:
+            volume = 4.0/3.0*np.pi*(self.chain["r_star"].values**3.0)*(u.Rsun**3.0)
+            self.chain["rho_star"] = (self.chain["m_star"].values*u.Msun/volume).to(u.kg/u.m/u.m/u.m).value
+            val, mi, ma = get_vals(self.chain["rho_star"].values)
+            self.vals["rho_star"], self.err_up["rho_star"], self.err_down["rho_star"] = val, ma, mi
+            print("rho_star",val, mi, ma)
         if self.priors.rho_param:     
             self.chain["aRs_p1"] = ((c.G*((self.chain["per_p1"].values*u.d)**2.0)*(self.chain["rho_star"].values*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
             val, mi, ma = get_vals(self.chain["aRs_p1"].values)
             self.vals["aRs_p1"], self.err_up["aRs_p1"], self.err_down["aRs_p1"] = val, ma, mi
-            print("aRs_p1:",val, mi, ma)
+            print("aRs_p1",val, mi, ma)
         if self.priors.b_param:    
             self.chain["inc_p1"] = np.arccos(self.chain["b_p1"].values/self.chain["aRs_p1"].values*((1.0+self.chain["e_p1"].values*np.sin(self.chain["omega_p1"].values*np.pi/180.0))/(1.0 - self.chain["e_p1"].values**2.0)))*180.0/np.pi
             val, mi, ma = get_vals(self.chain["inc_p1"].values)
             self.vals["inc_p1"], self.err_up["inc_p1"], self.err_down["inc_p1"] = val, ma, mi
-            print("inc_p1:",val, mi, ma)
+            print("inc_p1",val, mi, ma)
         if self.priors.true_obliquity_param:
             self.chain["veq_star"] = (2.0*np.pi*self.chain["r_star"].values*u.Rsun/self.chain["Prot_star"].values/u.d).to(u.km/u.s).value
             self.chain["vsini_star"] = self.chain["veq_star"].values*np.sqrt(1.0-self.chain["cosi_star"].values**2.0)
             self.chain["psi_p1"] = np.arccos(self.chain["cosi_star"].values*np.cos(self.chain["inc_p1"].values*np.pi/180.0) + np.sqrt(1.0-self.chain["cosi_star"].values**2.0)*np.sin(self.chain["inc_p1"].values*np.pi/180.0)*np.cos(self.chain["lam_p1"].values*np.pi/180.0))*180.0/np.pi
             val, mi, ma = get_vals(self.chain["veq_star"].values)
             self.vals["veq_star"], self.err_up["veq_star"], self.err_down["veq_star"] = val, ma, mi
-            print("veq_star:",val, mi, ma)
+            print("veq_star",val, mi, ma)
             val, mi, ma = get_vals(self.chain["vsini_star"].values)
             self.vals["vsini_star"], self.err_up["vsini_star"], self.err_down["vsini_star"] = val, ma, mi
-            print("vsini_star:",val, mi, ma)
+            print("vsini_star",val, mi, ma)
             val, mi, ma = get_vals(self.chain["psi_p1"].values)
             self.vals["psi_p1"], self.err_up["psi_p1"], self.err_down["psi_p1"] = val, ma, mi
-            print("psi_p1:",val, mi, ma)
-            
-    def find_fixed_or_chain(self,parameter):
-        if parameter in self.chain.columns:
-            return self.chain[parameter].values
-        else:
-            return float(self.priors.dct[parameter][1][0])
+            print("psi_p1",val, mi, ma)
         
-    def print_mass_radius_rho_sma_planet(self,rstar,mstar):
+    def print_mass_radius_rho_sma_planet(self,rstar=(1.0,0.1),mstar=(1.0,0.1),r_units=u.Rjup,sma_units=u.AU,m_units=u.Mjup):
         Rs = np.random.normal(rstar[0],rstar[1],len(self.chain))*u.Rsun
         Ms = np.random.normal(mstar[0],mstar[1],len(self.chain))*u.Msun
-        rp = self.find_fixed_or_chain("p_p1")*Rs
-        rp = rp.to(u.Rjup)
-        print("R_planet (Rjup):",get_vals(rp.value))
-        aRs = self.find_fixed_or_chain("aRs_p1")
-        sma = (aRs*Rs).to(u.AU)
-        print("Sma_planet (au):",get_vals(sma.value))
-        K = self.find_fixed_or_chain("K_p1")*u.m/u.s
-        e = self.find_fixed_or_chain("e_p1")
-        inc = self.find_fixed_or_chain("inc_p1")
+        rp = self.chain["p_p1"].values*Rs
+        rp = rp.to(r_units)
+        print("R_planet",get_vals(rp.value))
+        aRs = self.chain["aRs_p1"].values*Rs
+        sma = aRs.to(sma_units)
+        print("Sma_planet:",get_vals(sma.value))
+        K = self.chain["K_p1"].values*u.m/u.s
+        e = self.chain["e_p1"].values
+        inc = self.chain["inc_p1"].values
         mp = K*np.sqrt(Ms*sma*(1.0-e**2.0)/c.G)/np.sin(inc*np.pi/180.0)
-        mp = mp.to(u.Mjup)
-        print("M_planet (Mjup):",get_vals(mp.value))
+        mp = mp.to(m_units)
+        print("M_planet:",get_vals(mp.value))
         dens = 3.0*mp/4.0/np.pi/rp**3.0
-        dens = dens.to(u.kg/u.m/u.m/u.m)
-        print("Rho_planet (gr/cm3):",get_vals(dens.value/1000.0))
+        dens = dens.to(u.g/u.cm/u.cm/u.cm)
+        print("Rho_planet (gr/cm3):",get_vals(dens.value))
 
     def evaluate_RV_model(self,times1,instrument,models=False,number_models=5000):
         necessary_params = {k: self.vals[k] for k in ('per_p1','t0_p1','e_p1','omega_p1','K_p1','gamma_'+instrument,'gammadot','gammadotdot')}
         P, t0, e, w, K, gamma, gammadot, gammadotdot = necessary_params.values()
+        if 'gammadot_'+instrument in self.vals:
+            gammadot = self.vals['gammadot_'+instrument]
+        if 'gammadotdot_'+instrument in self.vals:
+            gammadotdot = self.vals['gammadotdot_'+instrument]
         rv_trend = gammadot*(times1-t0) + gammadotdot*(times1-t0)**2.0
         rv_model = rmfit.get_rv_curve(times1,P,t0,e,w,K,plot=False,verbose=False)
         if models:
@@ -413,6 +441,10 @@ class Post:
     def evaluate_RM_model(self,times1,instrument,models=False,number_models=5000):
         necessary_params = {k: self.vals[k] for k in ('lam_p1','vsini_star','per_p1','t0_p1','p_p1','e_p1','omega_p1','K_p1','aRs_p1','inc_p1','u1_'+instrument,'u2_'+instrument,'beta_'+instrument,'gamma_'+instrument, 'gammadot', 'gammadotdot','sigma_'+instrument)}
         lam, vsini, P, t0, RpRs, e, w, K, aRs, inc, u1, u2, beta, gamma, gammadot, gammadotdot, jitter = necessary_params.values()
+        if 'gammadot_'+instrument in self.vals:
+            gammadot = self.vals['gammadot_'+instrument]
+        if 'gammadotdot_'+instrument in self.vals:
+            gammadotdot = self.vals['gammadotdot_'+instrument]
         error = np.sqrt(self.data.yerr[instrument]**2.0 + jitter**2.0)
         RM = rmfit.RMHirano(lam,vsini,P,t0,aRs,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic")
         rv_trend = gammadot*(times1-t0) + gammadotdot*(times1-t0)**2.0
