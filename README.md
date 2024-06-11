@@ -31,8 +31,9 @@ pip install .
 
 To see examples of the usage of this module, see the example notebooks in the Examples folder.
 
-- Example 1: How to fit data with ironman
+- Example 1: How to fit data with ironman (sky-projected obliquity)
 - Example 2: How to simulate data (e.g., for proposals)
+- Example 3: How to fit data with ironman (true 3D obliquity)
 
 # Citation
 
