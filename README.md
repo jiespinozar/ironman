@@ -4,11 +4,11 @@ Ironman is a Python package for jointly fitting in-transit and out-of-transit ra
 
 # Dependencies
 
+- rmfit (and its dependencies, install from here: https://github.com/gummiks/rmfit)
 - numpy (pip install numpy)
 - scipy (pip install scipy)
 - pandas (pip install pandas)
 - batman-package (pip install batman-package)
-- rmfit (and its dependencies, install from here: https://github.com/gummiks/rmfit)
 - dynesty (pip install dynesty)
 - astropy (pip install astropy)
 
