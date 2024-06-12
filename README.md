@@ -41,3 +41,7 @@ If you use this code, please cite [Espinoza-Retamal et al. 2024](https://ui.adsa
 
 If you use the RM fitting capability, please cite [Stefansson et al. 2022](https://ui.adsabs.harvard.edu/abs/2022ApJ...931L..15S/abstract) and [Hirano et al. 2011](https://ui.adsabs.harvard.edu/abs/2011ApJ...742...69H/abstract)
 
+If you use the transit fitting capability, please cite [Kreidberg et al. 2015](https://ui.adsabs.harvard.edu/abs/2015ascl.soft10002K/abstract)
+
+If you use the RV fitting capability, please cite: [Fulton et al. 2018](https://ui.adsabs.harvard.edu/abs/2018PASP..130d4504F/abstract)
+
