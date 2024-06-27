@@ -864,7 +864,7 @@ class Results:
                 gammadotdot = sample.get('gammadotdot_' + instrument, sample.get('gammadotdot', 0))
 
                 rv_trend = gammadot * (times - self.fit.ta) + gammadotdot * (times - self.fit.ta) ** 2.0
-                rv_model = rmfit.get_rv_curve(times, P, t0, e, w, K, plot=False, verbose=False) #+ gamma + rv_trend
+                rv_model = rmfit.get_rv_curve(times, P, t0, e, w, K, plot=False, verbose=False) + gamma + rv_trend
 
                 models.append(rv_model)
 
@@ -915,7 +915,7 @@ class Results:
                 rv_trend = gammadot * (times - self.fit.ta) + gammadotdot * (times - self.fit.ta) ** 2.0
 
                 RM = rmfit.RMHirano(lam, vsini, P, t0, sma, inc, RpRs, e, w, [u1, u2], beta, vsini / 1.31, limb_dark="quadratic")
-                RM_model = RM.evaluate(times) + rmfit.get_rv_curve(times, P, t0, e, w, K, plot=False, verbose=False) #+ gamma + rv_trend
+                RM_model = RM.evaluate(times) + rmfit.get_rv_curve(times, P, t0, e, w, K, plot=False, verbose=False) + gamma + rv_trend
 
                 models.append(RM_model)
 
