@@ -37,7 +37,7 @@ To see examples of the usage of this module, see the example notebooks in the Ex
 
 # Citation
 
-If you use this code, please cite [Espinoza-Retamal et al. 2024](https://ui.adsabs.harvard.edu/abs/2023ApJ...958L..20E/abstract)
+If you use this code, please cite [Espinoza-Retamal et al. 2024](https://ui.adsabs.harvard.edu/abs/2024arXiv240618631E/abstract)
 
 If you use the RM fitting capability, please cite [Stefansson et al. 2022](https://ui.adsabs.harvard.edu/abs/2022ApJ...931L..15S/abstract) and [Hirano et al. 2010](https://ui.adsabs.harvard.edu/abs/2010ApJ...709..458H/abstract)
 
