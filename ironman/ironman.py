@@ -64,7 +64,7 @@ def create_RM_data(bjd,dct_params):
         vsini = dct_params["vsini_star"]
         P =  dct_params["per_p1"]
         t0 = dct_params["t0_p1"]
-        RpRs = dct_params["p_p1"] 
+        RpRs = dct_params["p_p1"]
         e = dct_params["e_p1"]
         w = dct_params["omega_p1"]
         teff = dct_params["teff_star"]
@@ -78,7 +78,7 @@ def create_RM_data(bjd,dct_params):
         errors = np.ones(len(bjd))*rv_prec
         b_macro = get_vmacro(teff)
         b_inst = 300000./R
-        beta = (np.sqrt(b_macro**2.0 + b_inst **2.0)) 
+        beta = (np.sqrt(b_macro**2.0 + b_inst **2.0))
         RM = rmfit.RMHirano(lam,vsini,P,t0,sma,inc,RpRs,e,w,[u1,u2],beta,vsini/1.31,limb_dark="quadratic",supersample_factor=10,exp_time=exp_time)
         RM_model = RM.evaluate(bjd,base_error=rv_prec)
         return RM_model, errors
@@ -97,7 +97,7 @@ class DataOrganizer:
         self.verbose = verbose
         self.exp_times = exp_times
         self.output = output
-        
+
         self.lc_time = lc_time or {}
         self.lc_data = lc_data or {}
         self.lc_err = lc_err or {}
@@ -137,7 +137,7 @@ class DataOrganizer:
         Saves the data in a CSV file within the output directory.
         """
         data_entries = []
-        
+
         for instrument in self.lc_time:
             times = self.lc_time[instrument]
             data = self.lc_data[instrument]
@@ -182,26 +182,26 @@ class DataOrganizer:
     def from_input_directory(cls, input, verbose=True, save=False):
         """
         Initializes the DataOrganizer class from an input directory.
-    
+
         Parameters:
         input (str): Path to the input directory containing 'data.csv' and 'exp_times.json'.
-    
+
         Returns:
         DataOrganizer: An instance of the DataOrganizer class initialized with the data from the input directory.
         """
         csv_path = os.path.join(input, 'data.csv')
         df = pd.read_csv(csv_path)
-    
+
         json_path = os.path.join(input, 'exp_times.json')
         with open(json_path, 'r') as file:
             exp_times = json.load(file)
-    
+
         lc_time, lc_data, lc_err = {}, {}, {}
         rv_time, rv_data, rv_err = {}, {}, {}
         rm_time, rm_data, rm_err = {}, {}, {}
-    
+
         grouped = df.groupby(['type', 'instrument'])
-    
+
         for (data_type, instrument), group in grouped:
             if data_type == 'LC':
                 lc_time[instrument] = group['time'].tolist()
@@ -215,7 +215,7 @@ class DataOrganizer:
                 rm_time[instrument] = group['time'].tolist()
                 rm_data[instrument] = group['data'].tolist()
                 rm_err[instrument] = group['error'].tolist()
-    
+
         return cls(
             output=input,
             lc_time=lc_time,
@@ -377,6 +377,7 @@ class Fit:
         priors_file = os.path.join(input, 'priors.txt')
         flatchain_file = os.path.join(input, 'flatchain.csv')
         posteriors_file = os.path.join(input, 'posteriors.txt')
+        results_file = os.path.join(input, 'results.json')
     
         if not os.path.exists(data_file) or not os.path.exists(exp_times_file) or not os.path.exists(priors_file):
             raise FileNotFoundError("The input folder must contain data.csv, exp_times.json, and priors.txt files.")
@@ -388,6 +389,8 @@ class Fit:
     
         if os.path.exists(flatchain_file):
             self.chain = pd.read_csv(flatchain_file)
+            with open(results_file, 'r') as file:
+                self.results = json.load(file)
             if self.verbose:
                 print(f"Loaded flatchain from {flatchain_file}")
         else:
@@ -410,10 +413,13 @@ class Fit:
         Returns:
         float: The minimum time for the RV measurements.
         """
-        if not self.data.rv_time:
-            raise ValueError("No RV time data available in DataOrganizer.")
-        
-        min_rv_time = min(min(times) for times in self.data.rv_time.values())
+        if self.data.rv_time:
+            min_rv_time = min(min(times) for times in self.data.rv_time.values())
+        elif self.data.rm_time:
+            min_rv_time = min(min(times) for times in self.data.rm_time.values())
+        else:
+            min_rv_time = 2450000.0
+            print("No RV/RM time data available in DataOrganizer.")
         return min_rv_time
         
     def priors_transform(self, params):
@@ -664,6 +670,36 @@ class Fit:
                 weights = np.exp(res['logwt'] - res['logz'][-1])
                 self.chain = resample_equal(res.samples, weights)
 
+                logZ = res.logz[-1]
+                logZ_err = res.logzerr[-1]
+                n_eff = res.eff
+
+                N = sum(len(times) for times in self.data.x.values())
+
+                k = self.ndim  # number of parameters
+                max_loglike = np.max(res.logl)
+                BIC = k * np.log(N) - 2. * max_loglike
+                AIC = 2. * k - 2. * max_loglike
+
+                chi2 = -2 * max_loglike
+                dof = N - k
+                reduced_chi2 = chi2 / dof
+
+                self.results = {
+                'logZ': logZ,
+                'logZ_err': logZ_err,
+                'BIC': BIC,
+                'AIC': AIC,
+                'reduced_chi2': reduced_chi2,
+                'n_eff': n_eff}
+
+                output_path = os.path.join(self.data.output, 'results.json')
+                with open(output_path, 'w') as f:
+                    json.dump(self.results, f, indent=4)
+    
+                if self.data.verbose:
+                    print(f"Saved fit results to {output_path}")
+                
                 vals, err_up, err_down = {}, {}, {}
                 for i,parameter in enumerate(self.priors.varying_parameters):
                     val, mi, ma = get_vals(np.sort(self.chain[:,i]))
@@ -750,8 +786,11 @@ class Results:
 
         self.chain = self.fit.chain
         self.vals = self.fit.vals
+        self.err_down = self.fit.err_down
+        self.err_up = self.fit.err_up
         self.data = self.fit.data
         self.priors = self.fit.priors
+        self.results = self.fit.results
         
         if self.fit.verbose:
             print("Results class initialized.")
