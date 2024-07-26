@@ -302,6 +302,15 @@ class Priors:
         self.rho_param = self.m_star_param or "rho_star" in param_set
         self.b_param = "b_p1" in param_set
 
+        if "e_p1" in param_set and "omega_p1" in param_set:
+            print("e, omega parametrization detected")
+            self.secosw_sesinw_param = False
+        elif "secosomega_p1" in param_set and "sesinomega_p1" in param_set:
+            print("secosomega, sesinomega parametrization detected")
+            self.secosw_sesinw_param = True
+        else:
+            raise ValueError("Something went wrong with the eccentricity parametrization. ")
+        
         required_true_obliquity_params = {"cosi_star", "Prot_star", "r_star"}
 
         if "vsini_star" in param_set:
@@ -334,7 +343,7 @@ class Priors:
             print("Priors saved ...")
 
 class Fit:
-    def __init__(self, input=None, data=None, priors=None, ta=None, verbose=True):
+    def __init__(self, input=None, data=None, priors=None, ta=None, verbose=True, ecclim = 0.95):
         """
         Initialize the Fit class.
 
@@ -346,6 +355,9 @@ class Fit:
         verbose (bool): Flag to enable verbose output.
         """
         self.verbose = verbose
+        self.ecclim = ecclim
+        if self.verbose:
+            print(f"The code is working with an eccentricity limit of {ecclim}")
         
         if input:
             self._init_from_input(input)
@@ -507,12 +519,12 @@ class Fit:
         tr_model.w = dct_params["omega_p1"]
         tr_model.u = [dct_params["u1_" + inst], dct_params["u2_" + inst]]
         tr_model.limb_dark = "quadratic"
-    
+        
         exp_time = self.data.exp_times.get(inst, False)
         if exp_time != False:
-            m = batman.TransitModel(tr_model, bjd, supersample_factor=10, exp_time=float(exp_time))
+            m = batman.TransitModel(tr_model, bjd, supersample_factor=10, exp_time=float(exp_time), transittype='primary')
         else:
-            m = batman.TransitModel(tr_model, bjd)
+            m = batman.TransitModel(tr_model, bjd, transittype='primary')
     
         flux_lc = m.light_curve(tr_model)
         return flux_lc
@@ -533,7 +545,6 @@ class Fit:
         vsini = dct_params["vsini_star"]
         P = dct_params["per_p1"]
         t0 = dct_params["t0_p1"]
-        b = dct_params["b_p1"]
         RpRs = dct_params["p_p1"]
         e = dct_params["e_p1"]
         w = dct_params["omega_p1"]
@@ -582,7 +593,7 @@ class Fit:
     
         raise ValueError(f"Instrument {inst} not found in any instrument category.")
                 
-    def LogLike(self, params):
+    def LogLikelihood(self, params):
         """
         Estimates the LogLikelihood
     
@@ -590,9 +601,9 @@ class Fit:
         params (tuple): Valus for the parameters from the Sampler
     
         Outputs:
-        loglike (float): LogLikelihood value of the model
+        ll (float): LogLikelihood value of the model
         """
-        chi2 = 0
+        ll = 0
         n_fixed = 0
         dct_i = {}
         for index,parameter in enumerate(self.priors.parameters):
@@ -624,6 +635,11 @@ class Fit:
                     dct_i["gammadot_"+inst] = float(inst_params[5])
                     dct_i["gammadotdot_"+inst] = float(inst_params[6])
 
+        if self.priors.secosw_sesinw_param:
+            dct_i["e_p1"] = (dct_i["secosomega_p1"]**2.0) + (dct_i["sesinomega_p1"]**2.0)
+            dct_i["omega_p1"] = np.arctan2(dct_i["sesinomega_p1"], dct_i['secosomega_p1'])*180.0/np.pi
+        if dct_i["e_p1"] > self.ecclim or dct_i["e_p1"] < 0.0:
+            return -np.inf
         if self.priors.m_star_param:
             volume = 4.0/3.0*np.pi*(dct_i["r_star"]**3.0)*(u.Rsun**3.0)
             dct_i["rho_star"] = (dct_i["m_star"]*u.Msun/volume).to(u.kg/u.m/u.m/u.m).value
@@ -631,18 +647,20 @@ class Fit:
             dct_i["aRs_p1"] = ((c.G*((dct_i["per_p1"]*u.d)**2.0)*(dct_i["rho_star"]*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
         if self.priors.b_param:    
             dct_i["inc_p1"] = np.arccos(dct_i["b_p1"]/dct_i["aRs_p1"]*((1.0+dct_i["e_p1"]*np.sin(dct_i["omega_p1"]*np.pi/180.0))/(1.0 - dct_i["e_p1"]**2.0)))*180.0/np.pi
+        if np.isnan(dct_i["inc_p1"]):
+            return -np.inf
         if self.priors.true_obliquity_param:
             veq = (2.0*np.pi*dct_i["r_star"]*u.Rsun/dct_i["Prot_star"]/u.d).to(u.km/u.s).value
             dct_i["vsini_star"] = veq*np.sqrt(1.0-dct_i["cosi_star"]**2.0)
-        
+
         for inst in self.data.x:
             jitter = float(dct_i["sigma_"+inst])
             inst_data = self.data.y[inst]
             inst_err = self.data.yerr[inst]
             inst_model = self.get_model_for_inst(inst,dct_i)
             inst_err = np.sqrt(inst_err**2.0 + jitter**2.0)
-            chi2 += np.nansum(((inst_data-inst_model)/inst_err)**2.0) + np.nansum(np.log((inst_err**2.0)))
-        return -0.5*chi2
+            ll += rmfit.likelihood.ll_normal_ev_py(inst_data,inst_model,inst_err)
+        return ll
     
     def run(self, n_live=600, bound='multi', sample='rwalk', nthreads=2):
         """
@@ -662,7 +680,7 @@ class Fit:
 
         try:
             with Pool(processes=nthreads - 1) as executor:
-                sampler = DynamicNestedSampler(self.LogLike, self.priors_transform, self.ndim,
+                sampler = DynamicNestedSampler(self.LogLikelihood, self.priors_transform, self.ndim,
                                               bound=bound, sample=sample, nlive=n_live,
                                               pool=executor, queue_size=nthreads, bootstrap=0)
                 sampler.run_nested()
@@ -676,7 +694,7 @@ class Fit:
 
                 N = sum(len(times) for times in self.data.x.values())
 
-                k = self.ndim  # number of parameters
+                k = self.ndim  
                 max_loglike = np.max(res.logl)
                 BIC = k * np.log(N) - 2. * max_loglike
                 AIC = 2. * k - 2. * max_loglike
@@ -725,6 +743,13 @@ class Fit:
                         self.vals["beta_"+inst], self.err_down["beta_"+inst], self.err_up["beta_"+inst] = get_vals(self.chain["beta_"+inst].values)
                         self.vals["gamma_"+inst], self.err_down["gamma_"+inst], self.err_up["gamma_"+inst] = get_vals(self.chain["gamma_"+inst].values)
 
+                if self.priors.secosw_sesinw_param:
+                    self.chain["e_p1"] = (self.chain["secosomega_p1"].values**2.0) + (self.chain["sesinomega_p1"].values**2.0)
+                    val, mi, ma = get_vals(self.chain["e_p1"].values)
+                    self.vals["e_p1"], self.err_up["e_p1"], self.err_down["e_p1"] = val, ma, mi
+                    self.chain["omega_p1"] = np.arctan2(self.chain["sesinomega_p1"].values, self.chain['secosomega_p1'].values)*180.0/np.pi
+                    val, mi, ma = get_vals(self.chain["omega_p1"].values)
+                    self.vals["omega_p1"], self.err_up["omega_p1"], self.err_down["omega_p1"] = val, ma, mi
                 if self.priors.m_star_param:
                     volume = 4.0/3.0*np.pi*(self.chain["r_star"].values**3.0)*(u.Rsun**3.0)
                     self.chain["rho_star"] = (self.chain["m_star"].values*u.Msun/volume).to(u.kg/u.m/u.m/u.m).value
