@@ -1,6 +1,6 @@
 # ironman
 
-Ironman is a Python package for jointly fitting in-transit and out-of-transit radial velocities with photometric data. Its main objective is measuring the stellar obliquity of the orbit of a planet using the canonical Rossiter-McLaughlin effect.
+ironman is a Python package for jointly fitting in-transit and out-of-transit radial velocities with photometric data. Its main objective is measuring the stellar obliquity of the orbit of a planet using the canonical Rossiter-McLaughlin effect.
 
 # Dependencies
 
