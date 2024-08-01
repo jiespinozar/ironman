@@ -14,7 +14,7 @@ setup(
     long_description_content_type='text/markdown',
     url='https://github.com/jiespinozar/ironman',
     packages=find_packages(),
-    install_requires=['numpy','scipy','pandas','batman-package','dynesty','astropy','rmfit'],
+    install_requires=['numpy','scipy','pandas','batman-package','dynesty','astropy','rmfit','tqdm'],
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: MIT License',
