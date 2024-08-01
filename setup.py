@@ -6,7 +6,7 @@ def readme():
 
 setup(
     name='ironman-package',
-    version='0.0.10',
+    version='0.0.11',
     author='Juan Ignacio Espinoza-Retamal',
     author_email='jiespinozar@uc.cl',
     description='Joint Fit Rossiter McLaughlin Data with photometry and out-of-transit radial velocities',
@@ -14,7 +14,7 @@ setup(
     long_description_content_type='text/markdown',
     url='https://github.com/jiespinozar/ironman',
     packages=find_packages(),
-    install_requires=['numpy','scipy','pandas','batman-package','dynesty','astropy'],
+    install_requires=['numpy','scipy','pandas','batman-package','dynesty','astropy','rmfit'],
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: MIT License',
