@@ -6,7 +6,7 @@ def readme():
 
 setup(
     name='ironman-package',
-    version='1.0.0',
+    version='1.0.1',
     author='Juan Ignacio Espinoza-Retamal',
     author_email='jiespinozar@uc.cl',
     description='Joint Fit Rossiter McLaughlin Data with photometry and out-of-transit radial velocities',
