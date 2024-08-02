@@ -4,7 +4,7 @@ ironman is a Python package for jointly fitting in-transit and out-of-transit ra
 
 # Dependencies
 
-- rmfit (and its dependencies, install from here: https://github.com/gummiks/rmfit)
+- rmfit (pip install rmfit)
 - numpy (pip install numpy)
 - scipy (pip install scipy)
 - pandas (pip install pandas)
