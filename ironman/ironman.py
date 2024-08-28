@@ -947,12 +947,12 @@ class Results:
         Returns:
         array: The evaluated RM effect model(s).
         """
-        necessary_params = ['per_p1', 't0_p1', 'e_p1', 'omega_p1', 'K_p1', 'lam_p1', 'vsini_star', 'b_p1', 'p_p1', 
+        necessary_params = ['per_p1', 't0_p1', 'e_p1', 'omega_p1', 'K_p1', 'lam_p1', 'vsini_star', 'p_p1', 
                             'aRs_p1', 'inc_p1', 'beta_' + instrument, 'gamma_' + instrument, 'u1_' + instrument, 'u2_' + instrument]
 
         if not n_models:
             dct_params = {k: self.fit.vals[k] for k in necessary_params}
-            P, t0, e, w, K, lam, vsini, b, RpRs, sma, inc, beta, gamma, u1, u2 = dct_params.values()
+            P, t0, e, w, K, lam, vsini, RpRs, sma, inc, beta, gamma, u1, u2 = dct_params.values()
 
             gammadot = self.fit.vals.get('gammadot_' + instrument, self.fit.vals.get('gammadot', 0))
             gammadotdot = self.fit.vals.get('gammadotdot_' + instrument, self.fit.vals.get('gammadotdot', 0))
@@ -971,7 +971,7 @@ class Results:
                 if i % 100 == 0:
                     print(f"Sampling i = {i}", end="\r")
                 dct_params = {param: sample[param] for param in necessary_params}
-                P, t0, e, w, K, lam, vsini, b, RpRs, sma, inc, beta, gamma, u1, u2 = dct_params.values()
+                P, t0, e, w, K, lam, vsini, RpRs, sma, inc, beta, gamma, u1, u2 = dct_params.values()
 
                 gammadot = sample.get('gammadot_' + instrument, sample.get('gammadot', 0))
                 gammadotdot = sample.get('gammadotdot_' + instrument, sample.get('gammadotdot', 0))
