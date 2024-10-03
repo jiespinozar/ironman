@@ -2,16 +2,6 @@
 
 ironman is a Python package for jointly fitting in-transit and out-of-transit radial velocities with photometry. Its main objective is measuring stellar obliquities using the Rossiter-McLaughlin effect.
 
-# Dependencies
-
-- rmfit (pip install rmfit)
-- numpy (pip install numpy)
-- scipy (pip install scipy)
-- pandas (pip install pandas)
-- batman-package (pip install batman-package)
-- dynesty (pip install dynesty)
-- astropy (pip install astropy)
-
 # Installation
 
 You can install ironman with pip
@@ -34,6 +24,16 @@ To see examples of the usage of this module, see the example notebooks in the Ex
 - Example 1: How to fit data with ironman (sky-projected obliquity)
 - Example 2: How to simulate data (e.g., for proposals)
 - Example 3: How to fit data with ironman (true 3D obliquity)
+
+# Dependencies
+
+- rmfit (pip install rmfit)
+- numpy (pip install numpy)
+- scipy (pip install scipy)
+- pandas (pip install pandas)
+- batman-package (pip install batman-package)
+- dynesty (pip install dynesty)
+- astropy (pip install astropy)
 
 # Citation
 
