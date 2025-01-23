@@ -326,7 +326,14 @@ class Priors:
                     "Please check the parameters. For deriving the true obliquity include cosi_star, Prot_star, and r_star. "
                     "For the sky-projected obliquity include vsini_star."
                 )
+        else:
+            self.rm_param = False
 
+        if "inc_p1" in param_set:
+            self.transit_param = True
+        else:
+            self.transit_param = False
+    
     def save_priors(self):
         """
         Saves the priors dictionary to a file in the output folder.
@@ -649,7 +656,7 @@ class Fit:
             dct_i["aRs_p1"] = ((c.G*((dct_i["per_p1"]*u.d)**2.0)*(dct_i["rho_star"]*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
         if self.priors.b_param:    
             dct_i["inc_p1"] = np.arccos(dct_i["b_p1"]/dct_i["aRs_p1"]*((1.0+dct_i["e_p1"]*np.sin(dct_i["omega_p1"]*np.pi/180.0))/(1.0 - dct_i["e_p1"]**2.0)))*180.0/np.pi
-        if np.isnan(dct_i["inc_p1"]):
+        if self.priors.transit_param and np.isnan(dct_i["inc_p1"]):
             return -np.inf
         if self.priors.true_obliquity_param:
             veq = (2.0*np.pi*dct_i["r_star"]*u.Rsun/dct_i["Prot_star"]/u.d).to(u.km/u.s).value
