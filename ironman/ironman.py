@@ -311,19 +311,21 @@ class Priors:
         else:
             raise ValueError("Something went wrong with the eccentricity parametrization. ")
         
-        required_true_obliquity_params = {"cosi_star", "Prot_star", "r_star"}
+        if "lam_p1" in param_set:
 
-        if "vsini_star" in param_set:
-            self.true_obliquity_param = False
-        elif required_true_obliquity_params <= param_set:
-            self.true_obliquity_param = True
-        else:
-            self.true_obliquity_param = False
-            raise ValueError(
-                "Something went wrong with the obliquity parametrization. "
-                "Please check the parameters. For deriving the true obliquity include cosi_star, Prot_star, and r_star. "
-                "For the sky-projected obliquity include vsini_star."
-            )
+            required_true_obliquity_params = {"cosi_star", "Prot_star", "r_star"}
+
+            if "vsini_star" in param_set:
+                self.true_obliquity_param = False
+            elif required_true_obliquity_params <= param_set:
+                self.true_obliquity_param = True
+            else:
+                self.true_obliquity_param = False
+                raise ValueError(
+                    "Something went wrong with the obliquity parametrization. "
+                    "Please check the parameters. For deriving the true obliquity include cosi_star, Prot_star, and r_star. "
+                    "For the sky-projected obliquity include vsini_star."
+                )
 
     def save_priors(self):
         """
