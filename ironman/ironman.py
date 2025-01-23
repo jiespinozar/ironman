@@ -328,6 +328,7 @@ class Priors:
                 )
         else:
             self.rm_param = False
+            self.true_obliquity_param = False
 
         if "inc_p1" in param_set:
             self.transit_param = True
