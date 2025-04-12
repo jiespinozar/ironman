@@ -341,7 +341,7 @@ class Priors:
             self.cospsi_param = False
 
         #if "inc_p1" in param_set:
-        if self.data.lc_data != {}
+        if self.data.lc_data != {}:
             self.transit_param = True
         else:
             self.transit_param = False
