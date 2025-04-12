@@ -311,26 +311,37 @@ class Priors:
         else:
             raise ValueError("Something went wrong with the eccentricity parametrization. ")
         
-        if "lam_p1" in param_set:
+        #if "lam_p1" in param_set:
+        if self.data.rm_data != {}:    
 
             required_true_obliquity_params = {"cosi_star", "Prot_star", "r_star"}
+            required_cospsi_obliquity_params = {"cospsi_p1", "Prot_star", "r_star"}
 
-            if "vsini_star" in param_set:
+            if "vsini_star" in param_set and "lam_p1" in param_set:
                 self.true_obliquity_param = False
+                self.cospsi_param = False
             elif required_true_obliquity_params <= param_set:
                 self.true_obliquity_param = True
+                self.cospsi_param = False
+            elif required_cospsi_obliquity_params <= param_set and "cospsi_p1" in param_set:
+                self.true_obliquity_param = False
+                self.cospsi_param = True
             else:
                 self.true_obliquity_param = False
+                self.cospsi_param = False
                 raise ValueError(
                     "Something went wrong with the obliquity parametrization. "
-                    "Please check the parameters. For deriving the true obliquity include cosi_star, Prot_star, and r_star. "
-                    "For the sky-projected obliquity include vsini_star."
+                    "Please check the parameters. For deriving the true obliquity include cosi_star, Prot_star, r_star, and lam_p1"
+                    "Or cospsi_p1, Prot_star, r_star and vsini"
+                    "For the sky-projected obliquity include vsini_star and lam_p1"
                 )
         else:
             self.rm_param = False
             self.true_obliquity_param = False
+            self.cospsi_param = False
 
-        if "inc_p1" in param_set:
+        #if "inc_p1" in param_set:
+        if self.data.lc_data != {}
             self.transit_param = True
         else:
             self.transit_param = False
@@ -662,6 +673,19 @@ class Fit:
         if self.priors.true_obliquity_param:
             veq = (2.0*np.pi*dct_i["r_star"]*u.Rsun/dct_i["Prot_star"]/u.d).to(u.km/u.s).value
             dct_i["vsini_star"] = veq*np.sqrt(1.0-dct_i["cosi_star"]**2.0)
+        if self.priors.cospsi_param:
+            veq = (2.0*np.pi*dct_i["r_star"]*u.Rsun/dct_i["Prot_star"]/u.d).to(u.km/u.s).value
+            if veq < dct_i["vsini_star"]:
+                return -np.inf
+            sini_star = dct_i["vsini_star"]/veq
+            cosi_star = np.sqrt(1.0 - sini_star**2.0)
+            coslambda = (dct_i["cospsi_p1"] - cosi_star * np.cos(np.deg2rad(dct_i["inc_p1"]))) / (sini_star * np.sin(np.deg2rad(dct_i["inc_p1"])))
+            sinlambda = ((cosi_star * np.sin(np.deg2rad(dct_i["inc_p1"]))) - (np.cos(np.deg2rad(dct_i["inc_p1"])) * sini_star * dct_i["cospsi_p1"])) / (np.sin(np.deg2rad(dct_i["inc_p1"])) * sini_star)
+            if coslambda < -1. or coslambda > 1.:
+                return -np.inf
+            dct_i["lam_p1"] = np.arccos(coslambda)*180./np.pi
+            if sinlambda < 0.0:
+                dct_i["lam_p1"] = -dct_i["lam_p1"]
 
         for inst in self.data.x:
             jitter = float(dct_i["sigma_"+inst])
@@ -783,7 +807,23 @@ class Fit:
                     self.vals["vsini_star"], self.err_up["vsini_star"], self.err_down["vsini_star"] = val, ma, mi
                     val, mi, ma = get_vals(self.chain["psi_p1"].values)
                     self.vals["psi_p1"], self.err_up["psi_p1"], self.err_down["psi_p1"] = val, ma, mi
-                
+                if self.priors.cospsi_param::
+                    self.chain["veq_star"] = (2.0*np.pi*self.chain["r_star"].values*u.Rsun/self.chain["Prot_star"].values/u.d).to(u.km/u.s).value
+                    self.chain["psi_p1"] = np.arccos(self.chain["cospsi_p1"].values) * 180.0 / np.pi
+                    val, mi, ma = get_vals(self.chain["veq_star"].values)
+                    self.vals["veq_star"], self.err_up["veq_star"], self.err_down["veq_star"] = val, ma, mi
+                    val, mi, ma = get_vals(self.chain["psi_p1"].values)
+                    self.vals["psi_p1"], self.err_up["psi_p1"], self.err_down["psi_p1"] = val, ma, mi
+                    sini_star = self.chain["vsini_star"].values / self.chain["veq_star"].values
+                    cosi_star = np.sqrt(1.0 - sini_star**2.0)
+                    coslambda = (self.chain["cospsi_p1"].values - cosi_star * np.cos(self.chain["inc_p1"].values * np.pi / 180.0)) / (sini_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0))
+                    sinlambda = (cosi_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0) - np.cos(self.chain["inc_p1"].values * np.pi / 180.0) * sini_star * self.chain["cospsi_p1"].values) / (sini_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0))
+                    lam = np.arccos(coslambda) * 180.0 / np.pi
+                    lam[sinlambda < 0.0] = -lam[sinlambda < 0.0]
+                    self.chain["lam_p1"] = lam
+                    val, mi, ma = get_vals(self.chain["lam_p1"].values)
+                    self.vals["lam_p1"], self.err_up["lam_p1"], self.err_down["lam_p1"] = val, ma, mi
+                    
                 output_path = os.path.join(self.data.output, 'flatchain.csv')
                 self.chain.to_csv(output_path,index=False)
 
