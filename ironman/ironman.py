@@ -807,6 +807,9 @@ class Fit:
                     self.vals["vsini_star"], self.err_up["vsini_star"], self.err_down["vsini_star"] = val, ma, mi
                     val, mi, ma = get_vals(self.chain["psi_p1"].values)
                     self.vals["psi_p1"], self.err_up["psi_p1"], self.err_down["psi_p1"] = val, ma, mi
+                    self.chain["inc_star"] = np.arccos(self.chain["cosi_star"])*180.0/np.pi
+                    val, mi, ma = get_vals(self.chain["inc_star"].values)
+                    self.vals["inc_star"], self.err_up["inc_star"], self.err_down["inc_star"] = val, ma, mi
                 if self.priors.cospsi_param:
                     self.chain["veq_star"] = (2.0*np.pi*self.chain["r_star"].values*u.Rsun/self.chain["Prot_star"].values/u.d).to(u.km/u.s).value
                     self.chain["psi_p1"] = np.arccos(self.chain["cospsi_p1"].values) * 180.0 / np.pi
@@ -816,6 +819,12 @@ class Fit:
                     self.vals["psi_p1"], self.err_up["psi_p1"], self.err_down["psi_p1"] = val, ma, mi
                     sini_star = self.chain["vsini_star"].values / self.chain["veq_star"].values
                     cosi_star = np.sqrt(1.0 - sini_star**2.0)
+                    self.chain["cosi_star"] = cosi_star
+                    self.chain["inc_star"] = np.arccos(cosi_star)*180.0/np.pi
+                    val, mi, ma = get_vals(self.chain["cosi_star"].values)
+                    self.vals["cosi_star"], self.err_up["cosi_star"], self.err_down["cosi_star"] = val, ma, mi
+                    val, mi, ma = get_vals(self.chain["inc_star"].values)
+                    self.vals["inc_star"], self.err_up["inc_star"], self.err_down["inc_star"] = val, ma, mi
                     coslambda = (self.chain["cospsi_p1"].values - cosi_star * np.cos(self.chain["inc_p1"].values * np.pi / 180.0)) / (sini_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0))
                     sinlambda = (cosi_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0) - np.cos(self.chain["inc_p1"].values * np.pi / 180.0) * sini_star * self.chain["cospsi_p1"].values) / (sini_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0))
                     lam = np.arccos(coslambda) * 180.0 / np.pi
