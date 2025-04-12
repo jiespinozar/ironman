@@ -9,7 +9,7 @@ setup(
     version='1.1.0',
     author='Juan Ignacio Espinoza-Retamal',
     author_email='jiespinozar@uc.cl',
-    description='Joint Fit Rossiter McLaughlin Data with photometry and out-of-transit radial velocities',
+    description='Joint fit Rossiter-McLaughlin data with photometry and out-of-transit radial velocities',
     long_description=readme(),
     long_description_content_type='text/markdown',
     url='https://github.com/jiespinozar/ironman',
