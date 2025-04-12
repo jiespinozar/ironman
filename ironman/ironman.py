@@ -683,9 +683,7 @@ class Fit:
             sinlambda = ((cosi_star * np.sin(np.deg2rad(dct_i["inc_p1"]))) - (np.cos(np.deg2rad(dct_i["inc_p1"])) * sini_star * dct_i["cospsi_p1"])) / (np.sin(np.deg2rad(dct_i["inc_p1"])) * sini_star)
             if coslambda < -1. or coslambda > 1.:
                 return -np.inf
-            dct_i["lam_p1"] = np.arccos(coslambda)*180./np.pi
-            if sinlambda < 0.0:
-                dct_i["lam_p1"] = -dct_i["lam_p1"]
+            dct_i["lam_p1"] = np.arctan2(sinlambda, coslambda)*180.0/np.pi
 
         for inst in self.data.x:
             jitter = float(dct_i["sigma_"+inst])
@@ -827,9 +825,7 @@ class Fit:
                     self.vals["inc_star"], self.err_up["inc_star"], self.err_down["inc_star"] = val, ma, mi
                     coslambda = (self.chain["cospsi_p1"].values - cosi_star * np.cos(self.chain["inc_p1"].values * np.pi / 180.0)) / (sini_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0))
                     sinlambda = (cosi_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0) - np.cos(self.chain["inc_p1"].values * np.pi / 180.0) * sini_star * self.chain["cospsi_p1"].values) / (sini_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0))
-                    lam = np.arccos(coslambda) * 180.0 / np.pi
-                    lam[sinlambda < 0.0] = -lam[sinlambda < 0.0]
-                    self.chain["lam_p1"] = lam
+                    self.chain["lam_p1"] = np.arctan2(sinlambda, coslambda)*180.0/np.pi
                     val, mi, ma = get_vals(self.chain["lam_p1"].values)
                     self.vals["lam_p1"], self.err_up["lam_p1"], self.err_down["lam_p1"] = val, ma, mi
                     
