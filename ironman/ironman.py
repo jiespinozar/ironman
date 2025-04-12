@@ -681,7 +681,7 @@ class Fit:
             cosi_star = np.sqrt(1.0 - sini_star**2.0)
             coslambda = (dct_i["cospsi_p1"] - cosi_star * np.cos(np.deg2rad(dct_i["inc_p1"]))) / (sini_star * np.sin(np.deg2rad(dct_i["inc_p1"])))
             sinlambda = ((cosi_star * np.sin(np.deg2rad(dct_i["inc_p1"]))) - (np.cos(np.deg2rad(dct_i["inc_p1"])) * sini_star * dct_i["cospsi_p1"])) / (np.sin(np.deg2rad(dct_i["inc_p1"])) * sini_star)
-            if coslambda < -1. or coslambda > 1.:
+            if (coslambda < -1. or coslambda > 1.) or (sinlambda < -1. or sinlambda > 1.):
                 return -np.inf
             dct_i["lam_p1"] = np.arctan2(sinlambda, coslambda)*180.0/np.pi
 
