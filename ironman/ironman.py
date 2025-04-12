@@ -807,7 +807,7 @@ class Fit:
                     self.vals["vsini_star"], self.err_up["vsini_star"], self.err_down["vsini_star"] = val, ma, mi
                     val, mi, ma = get_vals(self.chain["psi_p1"].values)
                     self.vals["psi_p1"], self.err_up["psi_p1"], self.err_down["psi_p1"] = val, ma, mi
-                if self.priors.cospsi_param::
+                if self.priors.cospsi_param:
                     self.chain["veq_star"] = (2.0*np.pi*self.chain["r_star"].values*u.Rsun/self.chain["Prot_star"].values/u.d).to(u.km/u.s).value
                     self.chain["psi_p1"] = np.arccos(self.chain["cospsi_p1"].values) * 180.0 / np.pi
                     val, mi, ma = get_vals(self.chain["veq_star"].values)
