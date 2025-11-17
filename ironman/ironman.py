@@ -914,34 +914,64 @@ class Results:
         dens_val, dens_down, dens_up = get_vals(dens.value)
         print(f"Rho_planet: {dens_val:.4f} +{dens_up:.4f} -{dens_down:.4f} g/cm^3")
 
-    def evaluate_LC_model(self, times, instrument):
+    def evaluate_LC_model(self, times, instrument, n_models=False, n=5000):
         """
         Evaluate the light curve model for the given instrument and times.
     
         Parameters:
         times (array): Array of times to evaluate the light curve.
         instrument (str): Name of the instrument.
+        n_models (bool): If True, returns multiple models sampled from the chain. Default is False.
+        n (int): The number of models to sample if n_models is True. Default is 5000.
     
         Returns:
         flux_lc (array): Evaluated light curve model.
         """
-        necessary_params = {k: self.fit.vals[k] for k in ('per_p1', 't0_p1', 'p_p1', 'e_p1', 'omega_p1', 'aRs_p1', 'inc_p1', 'u1_' + instrument, 'u2_' + instrument)}
-        P, t0, RpRs, e, w, sma, inc, u1, u2 = necessary_params.values()
+        necessary_params = ['per_p1', 't0_p1', 'p_p1', 'e_p1', 'omega_p1', 'aRs_p1', 'inc_p1', 'u1_' + instrument, 'u2_' + instrument]
+
+        if not n_models:
+            dct_params = {k: self.fit.vals[k] for k in necessary_params}
+            P, t0, RpRs, e, w, sma, inc, u1, u2 = dct_params.values()
         
-        params = batman.TransitParams()
-        params.t0 = t0
-        params.per = P
-        params.rp = RpRs
-        params.a = sma
-        params.inc = inc
-        params.ecc = e
-        params.w = w
-        params.u = [u1, u2]
-        params.limb_dark = "quadratic"
-        m = batman.TransitModel(params, times)
-        flux_lc = m.light_curve(params)
+            params = batman.TransitParams()
+            params.t0 = t0
+            params.per = P
+            params.rp = RpRs
+            params.a = sma
+            params.inc = inc
+            params.ecc = e
+            params.w = w
+            params.u = [u1, u2]
+            params.limb_dark = "quadratic"
+            m = batman.TransitModel(params, times)
+            flux_lc = m.light_curve(params)
     
-        return flux_lc
+            return flux_lc
+
+        else:
+            models = []
+            chain_samples = self.fit.chain.sample(n)
+            for i, (_, sample) in enumerate(chain_samples.iterrows()):
+                if i % 100 == 0:
+                    print(f"Sampling i = {i}", end="\r")
+                dct_params = {param: sample[param] for param in necessary_params}
+                P, t0, RpRs, e, w, sma, inc, u1, u2 = dct_params.values()
+
+                params = batman.TransitParams()
+                params.t0 = t0
+                params.per = P
+                params.rp = RpRs
+                params.a = sma
+                params.inc = inc
+                params.ecc = e
+                params.w = w
+                params.u = [u1, u2]
+                params.limb_dark = "quadratic"
+                m = batman.TransitModel(params, times)
+                flux_lc = m.light_curve(params)
+                
+                models.append(flux_lc)
+            return np.array(models)
 
     def evaluate_RV_model(self, times, instrument, n_models=False, n=5000):
         """
