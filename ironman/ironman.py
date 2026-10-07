@@ -262,26 +262,37 @@ class Priors:
             self.save_priors()
 
     def _read_and_classify_priors(self, file):
-        """
-        Reads the priors from a file, stores them in a dictionary,
-        and classifies them into fixed and varying parameters.
-
-        Parameters:
-        file (str): Path to the priors file.
-        """
         with open(file) as priors_file:
-            for line in priors_file:
-                elements = re.split(r'\s+', line.strip())
-                param_name, prior_type = elements[:2]
-                hyperparameters = tuple(map(float, elements[2].split(',')))
+            for line_number, line in enumerate(priors_file, start=1):
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
 
-                self.dct[param_name] = [prior_type, hyperparameters]
-                self.parameters.append(param_name)
+                elements = line.split()
+                if len(elements) != 3:
+                    raise ValueError(
+                        f"Invalid prior on line {line_number}: {line}"
+                    )
+
+                parameter, prior_type, specification = elements
+                if parameter in self.dct:
+                    raise ValueError(f"Duplicate prior: {parameter}")
+
+                hyperparameters = tuple(
+                    map(float, specification.split(","))
+                )
+                if prior_type == "FIXED" and len(hyperparameters) != 1:
+                    raise ValueError(
+                        f"FIXED prior requires one value: {parameter}"
+                    )
+
+                self.dct[parameter] = [prior_type, hyperparameters]
+                self.parameters.append(parameter)
 
                 if prior_type == "FIXED":
-                    self.fixed_parameters.append(param_name)
+                    self.fixed_parameters.append(parameter)
                 else:
-                    self.varying_parameters.append(param_name)
+                    self.varying_parameters.append(parameter)
 
     def _print_fixed_parameters(self):
         """
@@ -364,36 +375,59 @@ class Priors:
             print("Priors saved ...")
 
 class Fit:
-    def __init__(self, input=None, data=None, priors=None, ta=None, verbose=True, ecclim = 0.95):
-        """
-        Initialize the Fit class.
-
-        Parameters:
-        input (str, optional): Path to the input folder containing data.csv, exp_times.json, and priors.txt.
-        data (DataOrganizer, optional): DataOrganizer object containing the observational data.
-        priors (Priors, optional): Priors object containing prior information.
-        ta (float, optional): Time reference for RV slope. If not provided, the minimum RV time will be used.
-        verbose (bool): Flag to enable verbose output.
-        """
+    def __init__(
+        self, input=None, data=None, priors=None, ta=None,
+        verbose=True, ecclim=0.95
+    ):
+        """Initialize a fit; new fits default to the mean RV/RM epoch."""
         self.verbose = verbose
         self.ecclim = ecclim
+
         if self.verbose:
-            print(f"The code is working with an eccentricity limit of {ecclim}")
-        
+            print(
+                f"The code is working with an eccentricity "
+                f"limit of {ecclim}"
+            )
+
         if input:
             self._init_from_input(input)
         elif data and priors:
             self.data = data
             self.priors = priors
         else:
-            raise ValueError("Either 'input' must be provided or both 'data' and 'priors' must be provided.")
+            raise ValueError(
+                "Either 'input' must be provided or both "
+                "'data' and 'priors' must be provided."
+            )
 
-        if ta is None:
+        loaded_chain = hasattr(self, "chain")
+        saved_ta = self.results.get("ta") if loaded_chain else None
+
+        if ta is not None:
+            self.ta = float(ta)
+
+            if saved_ta is not None and self.ta != float(saved_ta):
+                raise ValueError(
+                    "The loaded posterior uses a different ta. "
+                    "Changing its reference epoch requires "
+                    "transforming the trend parameters."
+                )
+
+        elif saved_ta is not None:
+            self.ta = float(saved_ta)
+
+        elif loaded_chain:
+            # Legacy outputs used the old default and did not save ta.
             self.ta = self._get_min_rv_time()
+
         else:
-            self.ta = ta
+            self.ta = self._get_reference_time()
+
+        if not np.isfinite(self.ta):
+            raise ValueError("ta must be finite")
 
         self.ndim = len(self.priors.varying_parameters)
+        self._build_instrument_parameter_map()
 
         if self.verbose:
             print("Fit class initialized.")
@@ -438,6 +472,33 @@ class Fit:
                 print(f"Loaded posteriors from {posteriors_file}")
         else:
             print("No posteriors.txt file detected")
+
+    def _get_reference_time(self):
+        """Mean observation time over all active RV and RM instruments."""
+        instruments = dict.fromkeys(
+            self.data.rv_instruments + self.data.rm_instruments
+        )
+
+        arrays = []
+        for instrument in instruments:
+            times = np.asarray(
+                self.data.x[instrument], dtype=float
+            ).ravel()
+            if times.size:
+                arrays.append(times)
+
+        if not arrays:
+            if self.verbose:
+                print("No RV/RM time data available in DataOrganizer.")
+            return 2450000.0
+
+        times = np.concatenate(arrays)
+        if not np.all(np.isfinite(times)):
+            raise ValueError(
+                "RV/RM observation times must be finite"
+            )
+
+        return float(np.mean(times))
     
     def _get_min_rv_time(self):
         """
@@ -454,6 +515,105 @@ class Fit:
             min_rv_time = 2450000.0
             print("No RV/RM time data available in DataOrganizer.")
         return min_rv_time
+
+    def _build_instrument_parameter_map(self):
+        families = {
+            "q1", "q2", "beta", "gamma", "sigma",
+            "gammadot", "gammadotdot",
+        }
+        instruments = list(self.data.x)
+        mapping = {instrument: {} for instrument in instruments}
+
+        for source in self.priors.parameters:
+            family, separator, suffix = source.partition("_")
+            if not separator or family not in families:
+                continue
+
+            # A complete instrument name takes precedence.
+            if suffix in mapping:
+                members = [suffix]
+            else:
+                matches = []
+                for instrument in instruments:
+                    pattern = (
+                        r"(?:^|_)("
+                        + re.escape(instrument)
+                        + r")(?=_|$)"
+                    )
+                    occurrences = list(re.finditer(pattern, suffix))
+
+                    if len(occurrences) > 1:
+                        raise ValueError(
+                            f"Repeated instrument {instrument} in {source}"
+                        )
+
+                    if occurrences:
+                        start, end = occurrences[0].span(1)
+                        matches.append((start, end, instrument))
+
+                matches.sort()
+                for left, right in zip(matches, matches[1:]):
+                    if left[1] > right[0]:
+                        raise ValueError(
+                            f"Ambiguous instrument names in {source}"
+                        )
+
+                members = [
+                    instrument for _, _, instrument in matches
+                ]
+
+            for instrument in members:
+                previous = mapping[instrument].get(family)
+                if previous is not None:
+                    raise ValueError(
+                        f"Multiple priors for {family}_{instrument}: "
+                        f"{previous}, {source}"
+                    )
+                mapping[instrument][family] = source
+
+        required = {
+            "lc": ("q1", "q2", "sigma"),
+            "rv": ("gamma", "sigma"),
+            "rm": ("q1", "q2", "beta", "gamma", "sigma"),
+        }
+        for category, families in required.items():
+            for instrument in getattr(
+                self.data, category + "_instruments"
+            ):
+                missing = [
+                    family for family in families
+                    if family not in mapping[instrument]
+                ]
+                if missing:
+                    raise ValueError(
+                        f"Missing priors for {instrument}: "
+                        f"{', '.join(missing)}"
+                    )
+
+        self.instrument_parameter_map = mapping
+
+    def _expand_instrument_parameters(self, values):
+        expanded = dict(values)
+
+        for instrument, families in (
+            self.instrument_parameter_map.items()
+        ):
+            for family, source in families.items():
+                expanded[f"{family}_{instrument}"] = values[source]
+
+        instruments = dict.fromkeys(
+            self.data.lc_instruments + self.data.rm_instruments
+        )
+        for instrument in instruments:
+            (
+                expanded[f"u1_{instrument}"],
+                expanded[f"u2_{instrument}"],
+            ) = u1_u2_from_q1_q2(
+                expanded[f"q1_{instrument}"],
+                expanded[f"q2_{instrument}"],
+            )
+
+        return expanded
         
     def priors_transform(self, params):
         """
@@ -613,6 +773,21 @@ class Fit:
                 return model_func(dcti, inst)
     
         raise ValueError(f"Instrument {inst} not found in any instrument category.")
+
+    def _get_parameter_values(self, params):
+        if len(params) != len(self.priors.varying_parameters):
+            raise ValueError(
+                "Sampler vector does not match the varying parameters"
+            )
+
+        values = dict(zip(self.priors.varying_parameters, params))
+
+        for parameter in self.priors.fixed_parameters:
+            values[parameter] = float(
+                self.priors.dct[parameter][1][0]
+            )
+
+        return self._expand_instrument_parameters(values)
                 
     def LogLikelihood(self, params):
         """
@@ -625,36 +800,7 @@ class Fit:
         ll (float): LogLikelihood value of the model
         """
         ll = 0
-        n_fixed = 0
-        dct_i = {}
-        for index,parameter in enumerate(self.priors.parameters):
-            if self.priors.dct[parameter][0] != "FIXED":
-                val = params[int(index-n_fixed)]
-                dct_i[parameter] = val
-            elif self.priors.dct[parameter][0] == "FIXED": 
-                n_fixed += 1
-                val = float(self.priors.dct[parameter][1][0])
-                dct_i[parameter] = val
-                
-        for inst in np.concatenate((self.data.lc_instruments,self.data.rm_instruments)):
-            search_key = "_"+inst
-            inst_params = [val for key, val in dct_i.items() if search_key in key]
-            dct_i["q1_"+inst] = float(inst_params[0])
-            dct_i["q2_"+inst] = float(inst_params[1])
-            dct_i["u1_"+inst], dct_i["u2_"+inst] = u1_u2_from_q1_q2(float(dct_i["q1_"+inst]),float(dct_i["q2_"+inst]))
-            dct_i["sigma_"+inst] = float(inst_params[2])
-            if inst in self.data.rm_instruments:
-                dct_i["beta_"+inst] = float(inst_params[2])
-                dct_i["gamma_"+inst] = float(inst_params[3])
-                dct_i["sigma_"+inst] = float(inst_params[4])
-                if len(inst_params) == 6:
-                    if "gammadot_"+inst in dct_i:
-                        dct_i["gammadot_"+inst] = float(inst_params[5])
-                    else:
-                        dct_i["gammadotdot_"+inst] = float(inst_params[5])
-                elif len(inst_params) > 6:
-                    dct_i["gammadot_"+inst] = float(inst_params[5])
-                    dct_i["gammadotdot_"+inst] = float(inst_params[6])
+        dct_i = self._get_parameter_values(params)
 
         if self.priors.secosw_sesinw_param:
             dct_i["e_p1"] = (dct_i["secosomega_p1"]**2.0) + (dct_i["sesinomega_p1"]**2.0)
@@ -693,30 +839,107 @@ class Fit:
             inst_err = np.sqrt(inst_err**2.0 + jitter**2.0)
             ll += rmfit.likelihood.ll_normal_ev_py(inst_data,inst_model,inst_err)
         return ll
+
+    def _initialize_posterior(self, samples):
+        samples = np.asarray(samples)
+        if (
+            samples.ndim != 2
+            or samples.shape[1]
+            != len(self.priors.varying_parameters)
+        ):
+            raise ValueError(
+                "Posterior samples do not match the varying parameters"
+            )
+
+        values = {
+            parameter: samples[:, index].copy()
+            for index, parameter in enumerate(
+                self.priors.varying_parameters
+            )
+        }
+        for parameter in self.priors.fixed_parameters:
+            values[parameter] = np.full(
+                len(samples),
+                self.priors.dct[parameter][1][0],
+            )
+
+        self.chain = pd.DataFrame(
+            self._expand_instrument_parameters(values)
+        )
+
+        fixed = set(self.priors.fixed_parameters)
+        for instrument, families in (
+            self.instrument_parameter_map.items()
+        ):
+            for family, source in families.items():
+                if source in fixed:
+                    fixed.add(f"{family}_{instrument}")
+
+        instruments = dict.fromkeys(
+            self.data.lc_instruments + self.data.rm_instruments
+        )
+        for instrument in instruments:
+            if (
+                f"q1_{instrument}" in fixed
+                and f"q2_{instrument}" in fixed
+            ):
+                fixed.update(
+                    (f"u1_{instrument}", f"u2_{instrument}")
+                )
+
+        self.vals, self.err_down, self.err_up = {}, {}, {}
+
+        for parameter in self.chain.columns:
+            if parameter in fixed:
+                self.vals[parameter] = float(
+                    self.chain[parameter].iloc[0]
+                )
+                self.err_down[parameter] = np.nan
+                self.err_up[parameter] = np.nan
+            else:
+                median, lower, upper = get_vals(
+                    self.chain[parameter].to_numpy()
+                )
+                self.vals[parameter] = median
+                self.err_down[parameter] = lower
+                self.err_up[parameter] = upper
     
     def run(self, n_live=600, bound='multi', sample='rwalk', nthreads=2):
         """
-        Run the dynamic nested sampling and save the results
-    
+        Run the dynamic nested sampling and save the results.
+
         Inputs:
         n_live (int): Number of live points.
         bound (str): Method used to bound the live points.
         sample (str): Method used to sample new points.
         nthreads (int): Number of threads to use for parallel processing.
-    
+
         Outputs:
-        It will create a posteriors.txt file in the outputs directory.
+        Saves results.json, flatchain.csv, and posteriors.txt.
+        Returns the posterior chain.
         """
         if self.data.verbose:
-            print(f"Running dynesty with {n_live} nlive and {nthreads} threads")
+            print(
+                f"Running dynesty with {n_live} nlive "
+                f"and {nthreads} threads"
+            )
 
         try:
             with Pool(processes=nthreads - 1) as executor:
-                sampler = DynamicNestedSampler(self.LogLikelihood, self.priors_transform, self.ndim,
-                                              bound=bound, sample=sample, nlive=n_live,
-                                              pool=executor, queue_size=nthreads, bootstrap=0)
+                sampler = DynamicNestedSampler(
+                    self.LogLikelihood,
+                    self.priors_transform,
+                    self.ndim,
+                    bound=bound,
+                    sample=sample,
+                    nlive=n_live,
+                    pool=executor,
+                    queue_size=nthreads,
+                    bootstrap=0,
+                )
                 sampler.run_nested()
                 res = sampler.results
+
                 weights = np.exp(res['logwt'] - res['logz'][-1])
                 self.chain = resample_equal(res.samples, weights)
 
@@ -725,9 +948,9 @@ class Fit:
                 n_eff = res.eff
 
                 N = sum(len(times) for times in self.data.x.values())
-
-                k = self.ndim  
+                k = self.ndim
                 max_loglike = np.max(res.logl)
+
                 BIC = k * np.log(N) - 2. * max_loglike
                 AIC = 2. * k - 2. * max_loglike
 
@@ -736,101 +959,319 @@ class Fit:
                 reduced_chi2 = chi2 / dof
 
                 self.results = {
-                'logZ': logZ,
-                'logZ_err': logZ_err,
-                'BIC': BIC,
-                'AIC': AIC,
-                'reduced_chi2': reduced_chi2,
-                'n_eff': n_eff}
+                    'logZ': logZ,
+                    'logZ_err': logZ_err,
+                    'BIC': BIC,
+                    'AIC': AIC,
+                    'reduced_chi2': reduced_chi2,
+                    'n_eff': n_eff,
+                    'ta': self.ta,
+                }
 
-                output_path = os.path.join(self.data.output, 'results.json')
+                output_path = os.path.join(
+                    self.data.output, 'results.json'
+                )
                 with open(output_path, 'w') as f:
                     json.dump(self.results, f, indent=4)
-    
+
                 if self.data.verbose:
                     print(f"Saved fit results to {output_path}")
-                
-                vals, err_up, err_down = {}, {}, {}
-                for i,parameter in enumerate(self.priors.varying_parameters):
-                    val, mi, ma = get_vals(np.sort(self.chain[:,i]))
-                    vals[parameter], err_up[parameter], err_down[parameter] = val, ma, mi
-                self.chain = pd.DataFrame(data = self.chain, columns = self.priors.varying_parameters)
-                for i,parameter in enumerate(self.priors.fixed_parameters):
-                    vals[parameter], err_up[parameter], err_down[parameter] = float(self.priors.dct[parameter][1][0]), np.nan, np.nan,
-                    vals_to_chain = np.full(len(self.chain),float(self.priors.dct[parameter][1][0]))
-                    self.chain[parameter] = vals_to_chain
-                self.vals = vals
-                self.err_up = err_up
-                self.err_down = err_down
 
-                for inst in np.concatenate((self.data.lc_instruments,self.data.rm_instruments)):
-                    search_key = "_"+inst
-                    inst_params = [s for s in self.chain.columns if search_key in s]
-                    self.chain["u1_"+inst],self.chain["u2_"+inst] = u1_u2_from_q1_q2(self.chain[inst_params[0]].values,self.chain[inst_params[1]].values)
-                    self.vals["u1_"+inst], self.err_down["u1_"+inst], self.err_up["u1_"+inst] = get_vals(self.chain["u1_"+inst].values)
-                    self.vals["u2_"+inst], self.err_down["u2_"+inst], self.err_up["u2_"+inst] = get_vals(self.chain["u2_"+inst].values)
-                    if inst in self.data.rm_instruments:
-                        self.chain["beta_"+inst] = self.chain[inst_params[2]].values
-                        self.chain["gamma_"+inst] = self.chain[inst_params[3]].values
-                        self.vals["beta_"+inst], self.err_down["beta_"+inst], self.err_up["beta_"+inst] = get_vals(self.chain["beta_"+inst].values)
-                        self.vals["gamma_"+inst], self.err_down["gamma_"+inst], self.err_up["gamma_"+inst] = get_vals(self.chain["gamma_"+inst].values)
+                # New: build the chain and instrumental parameters by name.
+                self._initialize_posterior(self.chain)
 
                 if self.priors.secosw_sesinw_param:
-                    self.chain["e_p1"] = (self.chain["secosomega_p1"].values**2.0) + (self.chain["sesinomega_p1"].values**2.0)
+                    self.chain["e_p1"] = (
+                        self.chain["secosomega_p1"].values**2.0
+                        + self.chain["sesinomega_p1"].values**2.0
+                    )
                     val, mi, ma = get_vals(self.chain["e_p1"].values)
-                    self.vals["e_p1"], self.err_up["e_p1"], self.err_down["e_p1"] = val, ma, mi
-                    self.chain["omega_p1"] = np.arctan2(self.chain["sesinomega_p1"].values, self.chain['secosomega_p1'].values)*180.0/np.pi
-                    val, mi, ma = get_vals(self.chain["omega_p1"].values)
-                    self.vals["omega_p1"], self.err_up["omega_p1"], self.err_down["omega_p1"] = val, ma, mi
+                    (
+                        self.vals["e_p1"],
+                        self.err_up["e_p1"],
+                        self.err_down["e_p1"],
+                    ) = val, ma, mi
+
+                    self.chain["omega_p1"] = (
+                        np.arctan2(
+                            self.chain["sesinomega_p1"].values,
+                            self.chain["secosomega_p1"].values,
+                        )
+                        * 180.0 / np.pi
+                    )
+                    val, mi, ma = get_vals(
+                        self.chain["omega_p1"].values
+                    )
+                    (
+                        self.vals["omega_p1"],
+                        self.err_up["omega_p1"],
+                        self.err_down["omega_p1"],
+                    ) = val, ma, mi
+
                 if self.priors.m_star_param:
-                    volume = 4.0/3.0*np.pi*(self.chain["r_star"].values**3.0)*(u.Rsun**3.0)
-                    self.chain["rho_star"] = (self.chain["m_star"].values*u.Msun/volume).to(u.kg/u.m/u.m/u.m).value
-                    val, mi, ma = get_vals(self.chain["rho_star"].values)
-                    self.vals["rho_star"], self.err_up["rho_star"], self.err_down["rho_star"] = val, ma, mi
-                if self.priors.rho_param:     
-                    self.chain["aRs_p1"] = ((c.G*((self.chain["per_p1"].values*u.d)**2.0)*(self.chain["rho_star"].values*u.kg/u.m/u.m/u.m)/3.0/np.pi)**(1./3.)).cgs.value
-                    val, mi, ma = get_vals(self.chain["aRs_p1"].values)
-                    self.vals["aRs_p1"], self.err_up["aRs_p1"], self.err_down["aRs_p1"] = val, ma, mi
-                if self.priors.b_param:    
-                    self.chain["inc_p1"] = np.arccos(self.chain["b_p1"].values/self.chain["aRs_p1"].values*((1.0+self.chain["e_p1"].values*np.sin(self.chain["omega_p1"].values*np.pi/180.0))/(1.0 - self.chain["e_p1"].values**2.0)))*180.0/np.pi
-                    val, mi, ma = get_vals(self.chain["inc_p1"].values)
-                    self.vals["inc_p1"], self.err_up["inc_p1"], self.err_down["inc_p1"] = val, ma, mi
+                    volume = (
+                        4.0 / 3.0 * np.pi
+                        * self.chain["r_star"].values**3.0
+                        * u.Rsun**3.0
+                    )
+                    self.chain["rho_star"] = (
+                        self.chain["m_star"].values * u.Msun / volume
+                    ).to(u.kg / u.m / u.m / u.m).value
+
+                    val, mi, ma = get_vals(
+                        self.chain["rho_star"].values
+                    )
+                    (
+                        self.vals["rho_star"],
+                        self.err_up["rho_star"],
+                        self.err_down["rho_star"],
+                    ) = val, ma, mi
+
+                if self.priors.rho_param:
+                    self.chain["aRs_p1"] = (
+                        (
+                            c.G
+                            * (self.chain["per_p1"].values * u.d)**2.0
+                            * (
+                                self.chain["rho_star"].values
+                                * u.kg / u.m / u.m / u.m
+                            )
+                            / 3.0 / np.pi
+                        )**(1. / 3.)
+                    ).cgs.value
+
+                    val, mi, ma = get_vals(
+                        self.chain["aRs_p1"].values
+                    )
+                    (
+                        self.vals["aRs_p1"],
+                        self.err_up["aRs_p1"],
+                        self.err_down["aRs_p1"],
+                    ) = val, ma, mi
+
+                if self.priors.b_param:
+                    self.chain["inc_p1"] = (
+                        np.arccos(
+                            self.chain["b_p1"].values
+                            / self.chain["aRs_p1"].values
+                            * (
+                                (
+                                    1.0
+                                    + self.chain["e_p1"].values
+                                    * np.sin(
+                                        self.chain["omega_p1"].values
+                                        * np.pi / 180.0
+                                    )
+                                )
+                                / (
+                                    1.0
+                                    - self.chain["e_p1"].values**2.0
+                                )
+                            )
+                        )
+                        * 180.0 / np.pi
+                    )
+                    val, mi, ma = get_vals(
+                        self.chain["inc_p1"].values
+                    )
+                    (
+                        self.vals["inc_p1"],
+                        self.err_up["inc_p1"],
+                        self.err_down["inc_p1"],
+                    ) = val, ma, mi
+
                 if self.priors.true_obliquity_param:
-                    self.chain["veq_star"] = (2.0*np.pi*self.chain["r_star"].values*u.Rsun/self.chain["Prot_star"].values/u.d).to(u.km/u.s).value
-                    self.chain["vsini_star"] = self.chain["veq_star"].values*np.sqrt(1.0-self.chain["cosi_star"].values**2.0)
-                    self.chain["psi_p1"] = np.arccos(self.chain["cosi_star"].values*np.cos(self.chain["inc_p1"].values*np.pi/180.0) + np.sqrt(1.0-self.chain["cosi_star"].values**2.0)*np.sin(self.chain["inc_p1"].values*np.pi/180.0)*np.cos(self.chain["lam_p1"].values*np.pi/180.0))*180.0/np.pi
-                    val, mi, ma = get_vals(self.chain["veq_star"].values)
-                    self.vals["veq_star"], self.err_up["veq_star"], self.err_down["veq_star"] = val, ma, mi
-                    val, mi, ma = get_vals(self.chain["vsini_star"].values)
-                    self.vals["vsini_star"], self.err_up["vsini_star"], self.err_down["vsini_star"] = val, ma, mi
-                    val, mi, ma = get_vals(self.chain["psi_p1"].values)
-                    self.vals["psi_p1"], self.err_up["psi_p1"], self.err_down["psi_p1"] = val, ma, mi
-                    self.chain["inc_star"] = np.arccos(self.chain["cosi_star"])*180.0/np.pi
-                    val, mi, ma = get_vals(self.chain["inc_star"].values)
-                    self.vals["inc_star"], self.err_up["inc_star"], self.err_down["inc_star"] = val, ma, mi
+                    self.chain["veq_star"] = (
+                        2.0 * np.pi
+                        * self.chain["r_star"].values * u.Rsun
+                        / self.chain["Prot_star"].values / u.d
+                    ).to(u.km / u.s).value
+
+                    self.chain["vsini_star"] = (
+                        self.chain["veq_star"].values
+                        * np.sqrt(
+                            1.0 - self.chain["cosi_star"].values**2.0
+                        )
+                    )
+
+                    self.chain["psi_p1"] = (
+                        np.arccos(
+                            self.chain["cosi_star"].values
+                            * np.cos(
+                                self.chain["inc_p1"].values
+                                * np.pi / 180.0
+                            )
+                            + np.sqrt(
+                                1.0
+                                - self.chain["cosi_star"].values**2.0
+                            )
+                            * np.sin(
+                                self.chain["inc_p1"].values
+                                * np.pi / 180.0
+                            )
+                            * np.cos(
+                                self.chain["lam_p1"].values
+                                * np.pi / 180.0
+                            )
+                        )
+                        * 180.0 / np.pi
+                    )
+
+                    val, mi, ma = get_vals(
+                        self.chain["veq_star"].values
+                    )
+                    (
+                        self.vals["veq_star"],
+                        self.err_up["veq_star"],
+                        self.err_down["veq_star"],
+                    ) = val, ma, mi
+
+                    val, mi, ma = get_vals(
+                        self.chain["vsini_star"].values
+                    )
+                    (
+                        self.vals["vsini_star"],
+                        self.err_up["vsini_star"],
+                        self.err_down["vsini_star"],
+                    ) = val, ma, mi
+
+                    val, mi, ma = get_vals(
+                        self.chain["psi_p1"].values
+                    )
+                    (
+                        self.vals["psi_p1"],
+                        self.err_up["psi_p1"],
+                        self.err_down["psi_p1"],
+                    ) = val, ma, mi
+
+                    self.chain["inc_star"] = (
+                        np.arccos(self.chain["cosi_star"])
+                        * 180.0 / np.pi
+                    )
+                    val, mi, ma = get_vals(
+                        self.chain["inc_star"].values
+                    )
+                    (
+                        self.vals["inc_star"],
+                        self.err_up["inc_star"],
+                        self.err_down["inc_star"],
+                    ) = val, ma, mi
+
                 if self.priors.cospsi_param:
-                    self.chain["veq_star"] = (2.0*np.pi*self.chain["r_star"].values*u.Rsun/self.chain["Prot_star"].values/u.d).to(u.km/u.s).value
-                    self.chain["psi_p1"] = np.arccos(self.chain["cospsi_p1"].values) * 180.0 / np.pi
-                    val, mi, ma = get_vals(self.chain["veq_star"].values)
-                    self.vals["veq_star"], self.err_up["veq_star"], self.err_down["veq_star"] = val, ma, mi
-                    val, mi, ma = get_vals(self.chain["psi_p1"].values)
-                    self.vals["psi_p1"], self.err_up["psi_p1"], self.err_down["psi_p1"] = val, ma, mi
-                    sini_star = self.chain["vsini_star"].values / self.chain["veq_star"].values
+                    self.chain["veq_star"] = (
+                        2.0 * np.pi
+                        * self.chain["r_star"].values * u.Rsun
+                        / self.chain["Prot_star"].values / u.d
+                    ).to(u.km / u.s).value
+
+                    self.chain["psi_p1"] = (
+                        np.arccos(self.chain["cospsi_p1"].values)
+                        * 180.0 / np.pi
+                    )
+
+                    val, mi, ma = get_vals(
+                        self.chain["veq_star"].values
+                    )
+                    (
+                        self.vals["veq_star"],
+                        self.err_up["veq_star"],
+                        self.err_down["veq_star"],
+                    ) = val, ma, mi
+
+                    val, mi, ma = get_vals(
+                        self.chain["psi_p1"].values
+                    )
+                    (
+                        self.vals["psi_p1"],
+                        self.err_up["psi_p1"],
+                        self.err_down["psi_p1"],
+                    ) = val, ma, mi
+
+                    sini_star = (
+                        self.chain["vsini_star"].values
+                        / self.chain["veq_star"].values
+                    )
                     cosi_star = np.sqrt(1.0 - sini_star**2.0)
+
                     self.chain["cosi_star"] = cosi_star
-                    self.chain["inc_star"] = np.arccos(cosi_star)*180.0/np.pi
-                    val, mi, ma = get_vals(self.chain["cosi_star"].values)
-                    self.vals["cosi_star"], self.err_up["cosi_star"], self.err_down["cosi_star"] = val, ma, mi
-                    val, mi, ma = get_vals(self.chain["inc_star"].values)
-                    self.vals["inc_star"], self.err_up["inc_star"], self.err_down["inc_star"] = val, ma, mi
-                    coslambda = (self.chain["cospsi_p1"].values - cosi_star * np.cos(self.chain["inc_p1"].values * np.pi / 180.0)) / (sini_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0))
-                    sinlambda = (cosi_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0) - np.cos(self.chain["inc_p1"].values * np.pi / 180.0) * sini_star * self.chain["cospsi_p1"].values) / (sini_star * np.sin(self.chain["inc_p1"].values * np.pi / 180.0))
-                    self.chain["lam_p1"] = np.arctan2(sinlambda, coslambda)*180.0/np.pi
-                    val, mi, ma = get_vals(self.chain["lam_p1"].values)
-                    self.vals["lam_p1"], self.err_up["lam_p1"], self.err_down["lam_p1"] = val, ma, mi
-                    
-                output_path = os.path.join(self.data.output, 'flatchain.csv')
-                self.chain.to_csv(output_path,index=False)
+                    self.chain["inc_star"] = (
+                        np.arccos(cosi_star) * 180.0 / np.pi
+                    )
+
+                    val, mi, ma = get_vals(
+                        self.chain["cosi_star"].values
+                    )
+                    (
+                        self.vals["cosi_star"],
+                        self.err_up["cosi_star"],
+                        self.err_down["cosi_star"],
+                    ) = val, ma, mi
+
+                    val, mi, ma = get_vals(
+                        self.chain["inc_star"].values
+                    )
+                    (
+                        self.vals["inc_star"],
+                        self.err_up["inc_star"],
+                        self.err_down["inc_star"],
+                    ) = val, ma, mi
+
+                    coslambda = (
+                        (
+                            self.chain["cospsi_p1"].values
+                            - cosi_star
+                            * np.cos(
+                                self.chain["inc_p1"].values
+                                * np.pi / 180.0
+                            )
+                        )
+                        / (
+                            sini_star
+                            * np.sin(
+                                self.chain["inc_p1"].values
+                                * np.pi / 180.0
+                            )
+                        )
+                    )
+                    sinlambda = (
+                        (
+                            cosi_star
+                            * np.sin(
+                                self.chain["inc_p1"].values
+                                * np.pi / 180.0
+                            )
+                            - np.cos(
+                                self.chain["inc_p1"].values
+                                * np.pi / 180.0
+                            )
+                            * sini_star
+                            * self.chain["cospsi_p1"].values
+                        )
+                        / (
+                            sini_star
+                            * np.sin(
+                                self.chain["inc_p1"].values
+                                * np.pi / 180.0
+                            )
+                        )
+                    )
+                    self.chain["lam_p1"] = (
+                        np.arctan2(sinlambda, coslambda)
+                        * 180.0 / np.pi
+                    )
+                    val, mi, ma = get_vals(
+                        self.chain["lam_p1"].values
+                    )
+                    (
+                        self.vals["lam_p1"],
+                        self.err_up["lam_p1"],
+                        self.err_down["lam_p1"],
+                    ) = val, ma, mi
+
+                output_path = os.path.join(
+                    self.data.output, 'flatchain.csv'
+                )
+                self.chain.to_csv(output_path, index=False)
 
                 combined_data = []
                 for parameter in self.vals:
@@ -838,15 +1279,20 @@ class Fit:
                         'parameter': parameter,
                         'median': self.vals[parameter],
                         'err_up': self.err_up[parameter],
-                        'err_down': self.err_down[parameter]
+                        'err_down': self.err_down[parameter],
                     })
-                output_path = os.path.join(self.data.output, 'posteriors.txt')
+
+                output_path = os.path.join(
+                    self.data.output, 'posteriors.txt'
+                )
                 df = pd.DataFrame(combined_data)
-                df.to_csv(output_path,index = False, sep ="\t")
-                
+                df.to_csv(output_path, index=False, sep="\t")
+
                 if self.data.verbose:
                     print(f"Saved posteriors to {output_path}")
+
                 return self.chain
+
         except Exception as e:
             print(f"An error occurred during the fitting process: {e}")
             return None
